@@ -153,26 +153,30 @@ export function registerHubV2(app,{pool,telegram}){
       const send=x=>telegram("sendMessage",{chat_id:id,...x});
 
       if(c){
-        await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Loading..."});
         if(data==="hub:home"){
+          await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Opening AI Hub"});
           await send({text:"🤖 <b>AI Opportunity Hub</b>\\n\\nTell me what you need, or choose a service.",parse_mode:"HTML",reply_markup:menu});
           return res.sendStatus(200);
         }
         if(data==="hub:ask"){
+          await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Ask AI"});
           await send({text:"🔎 <b>Ask AI</b>\\n\\nSend a normal message describing what you need. I will search the Hub.",parse_mode:"HTML",reply_markup:menu});
           return res.sendStatus(200);
         }
         if(data==="hub:android"){
+          await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Loading Android AI"});
           const r=await pool.query("SELECT * FROM ai_tools WHERE active=1 AND status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
           await send({text:format("📱 Android AI",r.rows),parse_mode:"HTML",reply_markup:menu});
           return res.sendStatus(200);
         }
         if(data.startsWith("hub:")){
+          await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Loading"});
           const p=await get(data.slice(4),"");
           await send({text:format(p.title,p.items),parse_mode:"HTML",reply_markup:menu});
           return res.sendStatus(200);
         }
         if(data==="menu:home"){
+          await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Main menu"});
           await send({text:"🤖 <b>AI Opportunity Hub</b>\\n\\nTell me what you need, or choose a service.",parse_mode:"HTML",reply_markup:menu});
           return res.sendStatus(200);
         }
