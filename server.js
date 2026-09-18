@@ -2011,12 +2011,36 @@ async function scoreContentWithAI(content) {
     pattern.test(title)
   );
 
+  let verifiedContext = String(content.body || "");
+  if (
+    isWellfound &&
+    content.source_url &&
+    (!verifiedContext || verifiedContext.startsWith("Collected from "))
+  ) {
+    try {
+      const jobHtml = await fetchPage(content.source_url);
+      const jobPage = cheerio.load(jobHtml);
+      const metaDescription =
+        jobPage('meta[name="description"]').attr("content") ||
+        jobPage('meta[property="og:description"]').attr("content") ||
+        "";
+      const visibleText = jobPage("body").text().replace(/\s+/g, " ").trim();
+      verifiedContext = [metaDescription, visibleText.slice(0, 5000)]
+        .filter(Boolean)
+        .join("\n");
+    } catch {
+      verifiedContext = "";
+    }
+  }
+
   const sourceRules = isWellfound
     ? `
 WELLFOUND JOB RULES:
 - This source is a job source. The category MUST be "AI Jobs" when the listing is genuinely AI/ML-related.
 - A Wellfound listing is AI-related only when the title clearly contains an AI/ML signal such as AI, artificial intelligence, machine learning, ML, LLM, generative AI, NLP, computer vision, robotics, data science, or a clearly AI-specific engineering/research role.
 - Do NOT classify generic engineering, support, sales, account management, procurement, finance, operations, recycling, HR, marketing, or other non-AI roles as AI Jobs merely because the company may work in technology.
+- If the title clearly names an AI/ML role, treat that as strong evidence that the listing is AI-related. Do not reject it merely because the page description is limited.
+- Use the verified source context when available to assess usefulness, freshness, engagement, and monetization.
 - If the listing is not clearly AI-related, give it a score of 0-20, set category to "AI Jobs", and set publishable to false.
 - Never give an unrelated Wellfound job a score of 75 or higher.
 `
@@ -2033,6 +2057,8 @@ Evaluate this candidate:
 Title: ${title}
 Source: ${source}
 URL: ${content.source_url || ""}
+Verified source context:
+${verifiedContext || "(No additional source text was available.)"}
 
 ${sourceRules}
 
