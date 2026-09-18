@@ -2943,8 +2943,167 @@ async function sendPremiumInvoice(chatId, product) {
   });
 }
 
+function escapeTelegramHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function sendTelegramCategory(chatId, command) {
+  const categories = {
+    tools: "AI Tools",
+    jobs: "AI Jobs",
+    free: "Free Resources",
+    learn: "AI Tutorials"
+  };
+  const labels = {
+    tools: "🤖 AI Tools",
+    jobs: "💼 AI Jobs",
+    free: "🎁 Free AI Resources",
+    learn: "🧠 Learn AI"
+  };
+
+  const category = categories[command];
+  if (!category) return;
+
+  let { rows } = await pool.query(
+    `SELECT title, body, source_url
+     FROM content
+     WHERE status = 'published' AND category = $1
+     ORDER BY published_at DESC NULLS LAST, id DESC
+     LIMIT 8`,
+    [category]
+  );
+
+  // If the exact category has no published items, give the member useful
+  // recent content instead of returning an empty-looking result.
+  if (!rows.length) {
+    const fallback = await pool.query(
+      `SELECT title, body, source_url, category
+       FROM content
+       WHERE status = 'published'
+       ORDER BY published_at DESC NULLS LAST, id DESC
+       LIMIT 5`
+    );
+    rows = fallback.rows;
+  }
+
+  const lines = [
+    `<b>${escapeTelegramHtml(labels[command])}</b>`,
+    rows.length
+      ? "Here are the latest available items:"
+      : "There are no published items yet. New items will appear here automatically."
+  ];
+
+  for (const item of rows) {
+    const body = String(item.body || "").trim().slice(0, 700);
+    lines.push(
+      `\n<b>• ${escapeTelegramHtml(item.title)}</b>` +
+      (item.category ? `\n🏷️ ${escapeTelegramHtml(item.category)}` : "") +
+      (body ? `\n${escapeTelegramHtml(body)}` : "") +
+      (item.source_url ? `\n🔗 <a href="${escapeTelegramHtml(item.source_url)}">Source / Apply</a>` : "")
+    );
+  }
+
+  lines.push(
+    "\nUse the buttons below to switch services.",
+  );
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: lines.join("\n"),
+    parse_mode: "HTML",
+    disable_web_page_preview: false,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "🤖 AI Tools", callback_data: "menu:tools" },
+          { text: "💼 AI Jobs", callback_data: "menu:jobs" }
+        ],
+        [
+          { text: "🎁 Free Resources", callback_data: "menu:free" },
+          { text: "🧠 Learn AI", callback_data: "menu:learn" }
+        ],
+        [
+          { text: "⭐ Premium", callback_data: "menu:premium" }
+        ]
+      ]
+    }
+  });
+}
+
+async function sendTelegramPremium(chatId) {
+  const { rows } = await pool.query(
+    "SELECT id, title, description, price_stars FROM premium_products WHERE active = 1 ORDER BY id ASC"
+  );
+
+  if (!rows.length) {
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: "⭐ Premium is being prepared. Please check back soon.",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "⬅️ Main Menu", callback_data: "menu:home" }]
+        ]
+      }
+    });
+    return;
+  }
+
+  const lines = ["⭐ <b>AI Opportunity Hub Premium</b>", "Premium digital resources:"];
+  const keyboard = [];
+
+  for (const product of rows) {
+    lines.push(
+      `\n<b>#${product.id} ${escapeTelegramHtml(product.title)}</b> — ${Number(product.price_stars)} Stars\n${escapeTelegramHtml(product.description)}`
+    );
+    keyboard.push([
+      { text: `⭐ Buy #${product.id} — ${Number(product.price_stars)} Stars`, callback_data: `buy:${product.id}` }
+    ]);
+  }
+
+  keyboard.push([{ text: "⬅️ Main Menu", callback_data: "menu:home" }]);
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: lines.join("\n"),
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function sendTelegramHome(chatId) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text:
+      "🤖 <b>AI Opportunity Hub</b>\n\n" +
+      "Your Telegram assistant for useful AI tools, AI jobs, free resources, tutorials and premium guides.\n\n" +
+      "Choose a service:",
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "🤖 AI Tools", callback_data: "menu:tools" },
+          { text: "💼 AI Jobs", callback_data: "menu:jobs" }
+        ],
+        [
+          { text: "🎁 Free Resources", callback_data: "menu:free" },
+          { text: "🧠 Learn AI", callback_data: "menu:learn" }
+        ],
+        [
+          { text: "⭐ Premium", callback_data: "menu:premium" }
+        ]
+      ]
+    }
+  });
+}
+
 async function handleTelegramUpdate(update) {
   try {
+    if (!update) return;
+
     if (update.pre_checkout_query) {
       await telegram("answerPreCheckoutQuery", {
         pre_checkout_query_id: update.pre_checkout_query.id,
@@ -2952,152 +3111,123 @@ async function handleTelegramUpdate(update) {
       });
       return;
     }
+
     if (update.callback_query) {
       const query = update.callback_query;
-      await telegram("answerCallbackQuery", { callback_query_id: query.id });
       const data = String(query.data || "");
+      const chatId = query.message?.chat?.id || query.from?.id;
+
+      // Telegram keeps a callback button in a loading state until the bot
+      // answers the callback query.
+      await telegram("answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: "Loading..."
+      });
+
+      if (data === "menu:home") {
+        await sendTelegramHome(chatId);
+        return;
+      }
+
       if (data.startsWith("buy:")) {
         const productId = Number(data.split(":")[1]);
         const { rows } = await pool.query(
           "SELECT * FROM premium_products WHERE id = $1 AND active = 1 LIMIT 1",
           [productId]
         );
-        if (rows.length) await sendPremiumInvoice(query.from.id, rows[0]);
+        if (!rows.length) {
+          await telegram("sendMessage", {
+            chat_id: chatId,
+            text: "That premium product is no longer available."
+          });
+          return;
+        }
+        await sendPremiumInvoice(chatId, rows[0]);
         return;
       }
 
       if (data.startsWith("menu:")) {
         const command = data.split(":")[1];
-        const categories = { tools: "AI Tools", jobs: "AI Jobs", free: "Free Resources", learn: "AI Tutorials" };
-        const labels = { tools: "🤖 AI Tools", jobs: "💼 AI Jobs", free: "🎁 Free AI Resources", learn: "🧠 Learn AI" };
-        const chatId = query.message?.chat?.id || query.from.id;
-
         if (command === "premium") {
-          const { rows } = await pool.query(
-            "SELECT id, title, description, price_stars FROM premium_products WHERE active = 1 ORDER BY id ASC"
-          );
-          const lines = ["⭐ *AI Opportunity Hub Premium*"];
-          const keyboard = [];
-          for (const product of rows) {
-            lines.push(`#${product.id} *${product.title}* — ${product.price_stars} Stars\n${product.description}`);
-            keyboard.push([{ text: `⭐ Buy #${product.id} — ${product.price_stars} Stars`, callback_data: `buy:${product.id}` }]);
-          }
-          await telegram("sendMessage", {
-            chat_id: chatId,
-            text: lines.join("\n\n"),
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: keyboard }
-          });
-        } else if (categories[command]) {
-          const { rows } = await pool.query(
-            `SELECT title, body, source_url
-             FROM content
-             WHERE status = 'published' AND category = $1
-             ORDER BY published_at DESC NULLS LAST, id DESC
-             LIMIT 8`,
-            [categories[command]]
-          );
-          const lines = [labels[command]];
-          if (!rows.length) {
-            lines.push("\nNo published items are available in this category yet. Check back soon.");
-          } else {
-            for (const item of rows) {
-              lines.push(`\n• *${item.title}*\n${String(item.body || "").slice(0, 500)}${item.source_url ? `\n🔗 ${item.source_url}` : ""}`);
-            }
-          }
-          await telegram("sendMessage", {
-            chat_id: chatId,
-            text: lines.join("\n"),
-            parse_mode: "Markdown",
-            disable_web_page_preview: false
-          });
+          await sendTelegramPremium(chatId);
+          return;
         }
+        await sendTelegramCategory(chatId, command);
+        return;
       }
+
       return;
     }
 
     const message = update.message;
-    if (message?.successful_payment) {
+    if (!message?.chat?.id) return;
+
+    if (message.successful_payment) {
       const payload = String(message.successful_payment.invoice_payload || "");
       if (!payload.startsWith("premium:")) return;
+
       const productId = Number(payload.split(":")[1]);
       const { rows } = await pool.query(
         "SELECT * FROM premium_products WHERE id = $1 AND active = 1 LIMIT 1",
         [productId]
       );
       if (!rows.length) return;
+
       await telegram("sendMessage", {
         chat_id: message.chat.id,
-        text: `Payment received for *${rows[0].title}*.\n\n${rows[0].content}`,
-        parse_mode: "Markdown"
+        text:
+          `💳 <b>Payment received</b>\n\n<b>${escapeTelegramHtml(rows[0].title)}</b>\n\n${escapeTelegramHtml(rows[0].content)}`,
+        parse_mode: "HTML"
       });
       return;
     }
-    const textMessage = message?.text || "";
-    if (!message?.chat?.id) return;
+
+    const textMessage = String(message.text || "").trim().split(" ")[0].toLowerCase();
+
     if (textMessage === "/start" || textMessage === "/help") {
-      await telegram("sendMessage", {
-        chat_id: message.chat.id,
-        text: "🤖 AI Opportunity Hub\n\nChoose an option below:",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "🤖 AI Tools", callback_data: "menu:tools" },
-              { text: "💼 AI Jobs", callback_data: "menu:jobs" }
-            ],
-            [
-              { text: "🎁 Free Resources", callback_data: "menu:free" },
-              { text: "🧠 Learn AI", callback_data: "menu:learn" }
-            ],
-            [
-              { text: "⭐ Premium", callback_data: "menu:premium" }
-            ]
-          ]
-        }
-      });
-    } else if (["/tools", "/jobs", "/free", "/learn"].includes(textMessage)) {
-      const command = textMessage.slice(1);
-      const labels = { tools: "🤖 AI Tools", jobs: "💼 AI Jobs", free: "🎁 Free AI Resources", learn: "🧠 Learn AI" };
-      const categories = { tools: "AI Tools", jobs: "AI Jobs", free: "Free Resources", learn: "AI Tutorials" };
-      const { rows } = await pool.query(
-        `SELECT title, body, source_url
-         FROM content
-         WHERE status = 'published' AND category = $1
-         ORDER BY published_at DESC NULLS LAST, id DESC
-         LIMIT 8`,
-        [categories[command]]
-      );
-      const lines = [labels[command]];
-      if (!rows.length) {
-        lines.push("\nNo published items are available in this category yet. Check back soon.");
-      } else {
-        for (const item of rows) {
-          lines.push(`\n• *${item.title}*\n${String(item.body || "").slice(0, 500)}${item.source_url ? `\n🔗 ${item.source_url}` : ""}`);
-        }
-      }
-      await telegram("sendMessage", {
-        chat_id: message.chat.id,
-        text: lines.join("\n"),
-        parse_mode: "Markdown",
-        disable_web_page_preview: false
-      });
-    } else if (textMessage === "/premium") {
-      const { rows } = await pool.query(
-        "SELECT id, title, description, price_stars FROM premium_products WHERE active = 1 ORDER BY id ASC"
-      );
-      const lines = ["⭐ *AI Opportunity Hub Premium*"];
-      const keyboard = [];
-      for (const product of rows) {
-        lines.push(`#${product.id} *${product.title}* — ${product.price_stars} Stars\n${product.description}`);
-        keyboard.push([{ text: `⭐ Buy #${product.id} — ${product.price_stars} Stars`, callback_data: `buy:${product.id}` }]);
-      }
-      await telegram("sendMessage", {
-        chat_id: message.chat.id,
-        text: lines.join("\n\n"),
-        parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: keyboard }
-      });
+      await sendTelegramHome(message.chat.id);
+      return;
     }
+
+    const commandMap = {
+      "/tools": "tools",
+      "/jobs": "jobs",
+      "/free": "free",
+      "/learn": "learn"
+    };
+
+    if (commandMap[textMessage]) {
+      await sendTelegramCategory(message.chat.id, commandMap[textMessage]);
+      return;
+    }
+
+    if (textMessage === "/premium") {
+      await sendTelegramPremium(message.chat.id);
+      return;
+    }
+
+    // Give every unknown message a useful response instead of silently ignoring it.
+    await telegram("sendMessage", {
+      chat_id: message.chat.id,
+      text:
+        "I can help you access AI services.\n\n" +
+        "Use /start or choose a service below:",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🤖 AI Tools", callback_data: "menu:tools" },
+            { text: "💼 AI Jobs", callback_data: "menu:jobs" }
+          ],
+          [
+            { text: "🎁 Free Resources", callback_data: "menu:free" },
+            { text: "🧠 Learn AI", callback_data: "menu:learn" }
+          ],
+          [
+            { text: "⭐ Premium", callback_data: "menu:premium" }
+          ]
+        ]
+      }
+    });
   } catch (error) {
     console.error("Telegram update error:", error.message);
   }
