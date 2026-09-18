@@ -2868,16 +2868,24 @@ async function runAutomationCycle() {
       try {
         const evaluation = await scoreContentWithAI(content);
 
+        const nextStatus =
+          evaluation.score <= 20
+            ? "rejected"
+            : "draft";
+
         await pool.query(
           `UPDATE content
            SET ai_score = $1,
-               category = $2
+               category = $2,
+               status = $4
            WHERE id = $3`,
-          [evaluation.score, evaluation.category, content.id]
+          [evaluation.score, evaluation.category, content.id, nextStatus]
         );
 
         scored++;
-        console.log(`Scored #${content.id}: ${evaluation.score}`);
+        console.log(
+          `Scored #${content.id}: ${evaluation.score} (${nextStatus})`
+        );
       } catch (error) {
         console.error(`Scoring #${content.id} failed:`, error.message);
       }
