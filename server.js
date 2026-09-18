@@ -129,6 +129,118 @@ function extractArticles(html, sourceUrl) {
   const $ = cheerio.load(html);
   const articles = [];
   const seen = new Set();
+  const sourceHost = new URL(sourceUrl).hostname.toLowerCase();
+
+  const blockedText = [
+    "sign in",
+    "log in",
+    "subscribe",
+    "privacy",
+    "terms",
+    "cookie",
+    "contact",
+    "about",
+    "careers",
+    "search",
+    "menu",
+    "documentation",
+    "official documentation",
+    "architecture & optimization",
+    "programming languages & frameworks",
+    "how we use github to be more productive, collaborative, and secure"
+  ];
+
+  const blockedPathParts = [
+    "/author/",
+    "/authors/",
+    "/category/",
+    "/categories/",
+    "/tag/",
+    "/tags/",
+    "/search",
+    "/login",
+    "/signin",
+    "/signup",
+    "/about/",
+    "/careers/",
+    "/docs/",
+    "/documentation/"
+  ];
+
+  function cleanTitle(value) {
+    let title = value
+      .replace(/\\s+/g, " ")
+      .trim();
+
+    if (title.includes(" • ")) {
+      title = title.split(" • ")[0].trim();
+    }
+
+    if (title.includes(" | ")) {
+      const parts = title.split(" | ");
+      if (parts.length > 1 && parts[0].length >= 25) {
+        title = parts[0].trim();
+      }
+    }
+
+    return title;
+  }
+
+  function isLikelyArticle(url, title) {
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase();
+    const lowerTitle = title.toLowerCase();
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+
+    if (blockedPathParts.some((part) => path.includes(part))) {
+      return false;
+    }
+
+    if (blockedText.some((word) => lowerTitle === word || lowerTitle.includes(word))) {
+      return false;
+    }
+
+    if (sourceHost.includes("github.blog")) {
+      if (!path.startsWith("/ai-and-ml/")) {
+        return false;
+      }
+
+      if (
+        path.includes("/github-copilot/") ||
+        path.includes("/generative-ai/") ||
+        path.includes("/llms/")
+      ) {
+        return true;
+      }
+
+      return path.split("/").filter(Boolean).length >= 2;
+    }
+
+    if (sourceHost.includes("blogs.microsoft.com")) {
+      if (path.includes("/blog/author/")) {
+        return false;
+      }
+
+      return /^\\/blog\\/\\d{4}\\/\\d{2}\\/\\d{2}\\//.test(parsed.pathname);
+    }
+
+    if (sourceHost.includes("huggingface.co")) {
+      return path.startsWith("/blog/") && path.split("/").filter(Boolean).length >= 3;
+    }
+
+    if (sourceHost.includes("blog.google")) {
+      return path.includes("/innovation-and-ai/");
+    }
+
+    if (sourceHost.includes("anthropic.com")) {
+      return path.startsWith("/news/") && path.split("/").filter(Boolean).length >= 2;
+    }
+
+    return true;
+  }
 
   $("a").each((index, element) => {
     if (articles.length >= 15) {
@@ -136,39 +248,15 @@ function extractArticles(html, sourceUrl) {
     }
 
     const href = $(element).attr("href");
+    const rawText = $(element).text();
 
-    const text = $(element)
-      .text()
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!href || !text) {
+    if (!href || !rawText) {
       return;
     }
+
+    const text = cleanTitle(rawText);
 
     if (text.length < 25 || text.length > 250) {
-      return;
-    }
-
-    const blocked = [
-      "sign in",
-      "log in",
-      "subscribe",
-      "privacy",
-      "terms",
-      "cookie",
-      "contact",
-      "about",
-      "careers",
-      "search",
-      "menu"
-    ];
-
-    const lower = text.toLowerCase();
-
-    if (
-      blocked.some((word) => lower.includes(word))
-    ) {
       return;
     }
 
@@ -180,19 +268,21 @@ function extractArticles(html, sourceUrl) {
       return;
     }
 
-    if (!absoluteUrl.startsWith("http")) {
+    if (!isLikelyArticle(absoluteUrl, text)) {
       return;
     }
 
-    if (seen.has(absoluteUrl)) {
+    const canonicalUrl = absoluteUrl.split("#")[0];
+
+    if (seen.has(canonicalUrl)) {
       return;
     }
 
-    seen.add(absoluteUrl);
+    seen.add(canonicalUrl);
 
     articles.push({
       title: text,
-      url: absoluteUrl
+      url: canonicalUrl
     });
   });
 
