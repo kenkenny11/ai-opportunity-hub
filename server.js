@@ -1795,10 +1795,17 @@ async function startServer() {
     await initializeDatabase();
 
     app.listen(PORT, () => {
-  
       console.log(
         `AI Opportunity Hub running on port ${PORT}`
       );
+
+      setTimeout(() => {
+        runAutomationCycle();
+      }, 15000);
+
+      setInterval(() => {
+        runAutomationCycle();
+      }, 30 * 60 * 1000);
     });
   } catch (error) {
     console.error(
