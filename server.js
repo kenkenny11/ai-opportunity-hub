@@ -1102,18 +1102,20 @@ Known keywords/context: ${keywords}
 
 Rules:
 - Use only the information supplied above.
-- Do not invent features, pricing, plans, results, integrations, users, statistics, guarantees, or claims about what the product can do.
-- If the supplied information is limited, keep the post concise and describe it as a tool/service to explore rather than making unsupported claims.
+- Do not invent or infer features, pricing, plans, results, integrations, users, statistics, guarantees, benefits, or claims about what the product can do.
+- Do not use implied benefits such as saving time, increasing productivity, improving results, simplifying work, or helping users unless that exact benefit is supplied above.
+- Avoid phrases such as "aiming to", "could be useful", "potentially", "designed to", or "helps" when they add an unsupported interpretation.
+- If the supplied information is limited, state only what is known and keep the post concise.
 - Do not promise income, jobs, business results, or financial outcomes.
-- Make it useful rather than sounding like an advertisement.
-- Use 70-120 words.
+- Make it informative rather than sounding like an advertisement.
+- Use 70-120 words when the supplied information supports that length; otherwise use fewer words.
 - Avoid repetitive product/company wording.
-${identityRule}
-- Include a short "Why check it out?" section only when supported by the supplied information.
-- End with a short question inviting discussion.
+\${identityRule}
+- A "Why check it out?" section is optional. Include it only if it can be written entirely from supplied facts; otherwise omit it.
+- End with a short question inviting discussion that does not assume the reader has used the product.
 - Do NOT include any affiliate link or disclosure; the server will add those.
 - Return ONLY the finished Telegram post.
-`;
+
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
