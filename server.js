@@ -139,7 +139,25 @@ async function initializeDatabase() {
       1
     WHERE NOT EXISTS (
       SELECT 1 FROM affiliate WHERE LOWER(company) = 'twin'
+    );
+
+  await pool.query(
+    `INSERT INTO affiliate (
+      product, company, url, affiliate_url, commission, keywords, disclosure, active
+    )
+    SELECT
+      'Vidpal',
+      'Vidpal',
+      'https://www.vidpal.ai/',
+      'https://vidpal.ai/?atp=AIOpportunityHub',
+      '30% recurring for life',
+      'vidpal, ai video, ai reels, video automation, content automation',
+      'Affiliate link',
+      1
+    WHERE NOT EXISTS (
+      SELECT 1 FROM affiliate WHERE LOWER(company) = 'vidpal'
     )`
+  );`
   );
 
   console.log("Database initialized");
