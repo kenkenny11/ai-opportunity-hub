@@ -13,6 +13,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TEST_CHAT_ID = process.env.TELEGRAM_TEST_CHAT_ID;
 const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
 const DATABASE_URL = process.env.DATABASE_URL;
+const AFFILIATE_ADMIN_KEY = process.env.AFFILIATE_ADMIN_KEY;
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -1139,6 +1140,202 @@ app.get("/api/affiliate/:id/stats", async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+function requireAffiliateAdmin(req, res) {
+  if (!AFFILIATE_ADMIN_KEY) {
+    res.status(503).json({
+      error: "AFFILIATE_ADMIN_KEY is not configured"
+    });
+    return false;
+  }
+
+  const providedKey = req.get("x-affiliate-admin-key");
+
+  if (!providedKey || providedKey !== AFFILIATE_ADMIN_KEY) {
+    res.status(401).json({
+      error: "Unauthorized"
+    });
+    return false;
+  }
+
+  return true;
+}
+
+app.post("/api/affiliate", async (req, res) => {
+  try {
+    if (!requireAffiliateAdmin(req, res)) return;
+
+    const {
+      product,
+      company,
+      url = "",
+      affiliate_url,
+      commission = "",
+      keywords = "",
+      disclosure = "Affiliate link",
+      active = 1
+    } = req.body;
+
+    if (!product || !company || !affiliate_url) {
+      return res.status(400).json({
+        error: "product, company and affiliate_url are required"
+      });
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(affiliate_url);
+    } catch {
+      return res.status(400).json({
+        error: "affiliate_url must be a valid URL"
+      });
+    }
+
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return res.status(400).json({
+        error: "affiliate_url must use http or https"
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO affiliate (
+        product,
+        company,
+        url,
+        affiliate_url,
+        commission,
+        keywords,
+        disclosure,
+        active
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      RETURNING *`,
+      [
+        product.trim(),
+        company.trim(),
+        String(url || "").trim(),
+        affiliate_url.trim(),
+        String(commission || "").trim(),
+        String(keywords || "").trim(),
+        String(disclosure || "Affiliate link").trim(),
+        Number(active) ? 1 : 0
+      ]
+    );
+
+    res.status(201).json({
+      saved: true,
+      affiliate: result.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      saved: false,
+      error: error.message
+    });
+  }
+});
+
+app.patch("/api/affiliate/:id", async (req, res) => {
+  try {
+    if (!requireAffiliateAdmin(req, res)) return;
+
+    const {
+      product,
+      company,
+      url,
+      affiliate_url,
+      commission,
+      keywords,
+      disclosure,
+      active
+    } = req.body;
+
+    if (affiliate_url !== undefined) {
+      let parsed;
+      try {
+        parsed = new URL(String(affiliate_url));
+      } catch {
+        return res.status(400).json({
+          error: "affiliate_url must be a valid URL"
+        });
+      }
+
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        return res.status(400).json({
+          error: "affiliate_url must use http or https"
+        });
+      }
+    }
+
+    const result = await pool.query(
+      `UPDATE affiliate
+       SET
+         product = COALESCE($1, product),
+         company = COALESCE($2, company),
+         url = COALESCE($3, url),
+         affiliate_url = COALESCE($4, affiliate_url),
+         commission = COALESCE($5, commission),
+         keywords = COALESCE($6, keywords),
+         disclosure = COALESCE($7, disclosure),
+         active = COALESCE($8, active)
+       WHERE id = $9
+       RETURNING *`,
+      [
+        product ?? null,
+        company ?? null,
+        url ?? null,
+        affiliate_url ?? null,
+        commission ?? null,
+        keywords ?? null,
+        disclosure ?? null,
+        active === undefined ? null : (Number(active) ? 1 : 0),
+        req.params.id
+      ]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        error: "Affiliate not found"
+      });
+    }
+
+    res.json({
+      updated: true,
+      affiliate: result.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      updated: false,
+      error: error.message
+    });
+  }
+});
+
+app.delete("/api/affiliate/:id", async (req, res) => {
+  try {
+    if (!requireAffiliateAdmin(req, res)) return;
+
+    const result = await pool.query(
+      "DELETE FROM affiliate WHERE id = $1 RETURNING id",
+      [req.params.id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        error: "Affiliate not found"
+      });
+    }
+
+    res.json({
+      deleted: true,
+      id: result.rows[0].id
+    });
+  } catch (error) {
+    res.status(500).json({
+      deleted: false,
       error: error.message
     });
   }
