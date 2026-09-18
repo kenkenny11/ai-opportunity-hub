@@ -1197,6 +1197,75 @@ This is a partner recommendation from AI Opportunity Hub. Check the service deta
   }
 });
 
+app.get("/api/affiliate/content/:id/publish", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM content WHERE id = $1 LIMIT 1",
+      [req.params.id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ published: false, error: "Content not found" });
+    }
+
+    const content = rows[0];
+
+    if (content.category !== "Digital Opportunities") {
+      return res.status(400).json({
+        published: false,
+        error: "This approval route is only for Digital Opportunities posts"
+      });
+    }
+
+    if (content.status !== "draft") {
+      return res.status(400).json({
+        published: false,
+        error: `Content is already ${content.status}`
+      });
+    }
+
+    if (Number(content.ai_score || 0) < 75) {
+      return res.status(400).json({
+        published: false,
+        error: "Content score must be 75 or higher"
+      });
+    }
+
+    if (!content.body || String(content.body).trim() === "") {
+      return res.status(400).json({
+        published: false,
+        error: "Content body is empty"
+      });
+    }
+
+    const telegramMessageId = await publishToTelegram(content);
+
+    await pool.query(
+      `UPDATE content
+       SET status = 'published',
+           telegram_message_id = $1,
+           published_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [telegramMessageId, content.id]
+    );
+
+    res.json({
+      published: true,
+      content: {
+        id: content.id,
+        title: content.title,
+        status: "published",
+        telegram_message_id: telegramMessageId
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      published: false,
+      error: error.message
+    });
+  }
+});
+
 app.get("/api/affiliate", async (req, res) => {
   try {
     const result = await pool.query(`
