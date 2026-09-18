@@ -2199,6 +2199,24 @@ async function generateContentWithAI(content) {
 
   const category = content.category || "AI News";
 
+  let verifiedContext = "";
+  if (category === "AI Jobs" && content.source && /Wellfound/i.test(content.source) && content.source_url) {
+    try {
+      const jobHtml = await fetchPage(content.source_url);
+      const jobPage = cheerio.load(jobHtml);
+      const metaDescription =
+        jobPage('meta[name="description"]').attr("content") ||
+        jobPage('meta[property="og:description"]').attr("content") ||
+        "";
+      const visibleText = jobPage("body").text().replace(/\\s+/g, " ").trim();
+      verifiedContext = [metaDescription, visibleText.slice(0, 5000)]
+        .filter(Boolean)
+        .join("\\n");
+    } catch {
+      verifiedContext = "";
+    }
+  }
+
   let formatRules = "";
 
   if (category === "AI Jobs") {
@@ -2254,6 +2272,8 @@ Title: ${content.title}
 Source: ${content.source}
 URL: ${content.source_url || ""}
 Category: ${category}
+Verified source context (use only if present; do not infer missing facts):
+${verifiedContext || "(No additional source text was available.)"}
 
 Strict rules:
 - Treat the title as the main verified claim.
