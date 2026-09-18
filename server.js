@@ -89,6 +89,51 @@ async function initializeDatabase() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_tools (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      description TEXT NOT NULL,
+      pricing TEXT DEFAULT 'Check website',
+      free_tier TEXT DEFAULT 'Check website',
+      url TEXT NOT NULL,
+      affiliate_id INTEGER,
+      verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  const toolSeeds = [
+    ['ChatGPT','Writing & Chat','AI assistant for writing, brainstorming, research and everyday tasks.','Free + paid','Free plan available','https://chatgpt.com/'],
+    ['Claude','Writing & Chat','AI assistant for writing, analysis, coding and document work.','Free + paid','Free plan available','https://claude.ai/'],
+    ['Google Gemini','Writing & Chat','Google AI assistant for writing, research, analysis and multimodal tasks.','Free + paid','Free access available','https://gemini.google.com/'],
+    ['Perplexity','Research','AI search and research assistant with source-linked answers.','Free + paid','Free plan available','https://www.perplexity.ai/'],
+    ['Canva','Image & Design','Design platform with AI tools for images, presentations, social posts and more.','Free + paid','Free plan available','https://www.canva.com/'],
+    ['Leonardo AI','Image & Design','AI image generation and creative tools for visual content.','Free + paid','Free tier available','https://leonardo.ai/'],
+    ['Runway','Video & Reels','AI video generation and editing tools for creators.','Free + paid','Free access varies','https://runwayml.com/'],
+    ['Vidpal','Video & Reels','AI video and content automation tools for social creators.','Paid/free options vary','Check current plan','https://www.vidpal.ai/',2],
+    ['ElevenLabs','Voice & Audio','AI voice generation, speech tools and audio creation.','Free + paid','Free tier available','https://elevenlabs.io/'],
+    ['GitHub Copilot','Coding','AI coding assistant for software development.','Free + paid','Free access varies','https://github.com/features/copilot'],
+    ['Cursor','Coding','AI-powered code editor for building and editing software.','Free + paid','Free tier available','https://cursor.com/'],
+    ['Hugging Face','AI Models','Platform for AI models, datasets and developer tools.','Free + paid','Many resources are free','https://huggingface.co/'],
+    ['Google AI Studio','AI Models','Browser-based workspace for experimenting with Google AI models and APIs.','Free + usage-based','Free usage available','https://aistudio.google.com/'],
+    ['NotebookLM','Research','AI notebook for working with sources and generating grounded summaries and notes.','Free + paid','Free access available','https://notebooklm.google.com/'],
+    ['Gamma','Productivity','AI tool for creating presentations, documents and web pages.','Free + paid','Free tier available','https://gamma.app/'],
+    ['Twin','AI Automation','AI automation platform for building and running automated workflows.','Paid/free options vary','Check current plan','https://twin.so/',1]
+  ];
+
+  for (const tool of toolSeeds) {
+    await pool.query(
+      `INSERT INTO ai_tools
+       (name, category, description, pricing, free_tier, url, affiliate_id)
+       SELECT $1,$2,$3,$4,$5,$6,$7
+       WHERE NOT EXISTS (SELECT 1 FROM ai_tools WHERE LOWER(name)=LOWER($1))`,
+      [tool[0],tool[1],tool[2],tool[3],tool[4],tool[5],tool[6] || null]
+    );
+  }
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS premium_products (
       id SERIAL PRIMARY KEY,
       title TEXT NOT NULL,
@@ -2951,65 +2996,99 @@ function escapeTelegramHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-async function sendTelegramCategory(chatId, command) {
-  const categories = {
-    tools: "AI Tools",
-    jobs: "AI Jobs",
-    free: "Free Resources",
-    learn: "AI Tutorials"
+function telegramMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: "🤖 AI Tools", callback_data: "menu:tools" },
+        { text: "💼 AI Jobs", callback_data: "menu:jobs" }
+      ],
+      [
+        { text: "💰 Opportunities", callback_data: "menu:opportunities" },
+        { text: "📱 Android AI", callback_data: "menu:android" }
+      ],
+      [
+        { text: "🎁 Free Resources", callback_data: "menu:free" },
+        { text: "🧠 Learn AI", callback_data: "menu:learn" }
+      ],
+      [
+        { text: "🔥 Trending", callback_data: "menu:trending" },
+        { text: "🔎 Search", callback_data: "menu:search" }
+      ],
+      [
+        { text: "⭐ Premium", callback_data: "menu:premium" }
+      ]
+    ]
   };
-  const labels = {
-    tools: "🤖 AI Tools",
-    jobs: "💼 AI Jobs",
-    free: "🎁 Free AI Resources",
-    learn: "🧠 Learn AI"
-  };
+}
 
-  const category = categories[command];
-  if (!category) return;
 
-  let { rows } = await pool.query(
-    `SELECT title, body, source_url
-     FROM content
-     WHERE status = 'published' AND category = $1
-     ORDER BY published_at DESC NULLS LAST, id DESC
-     LIMIT 8`,
-    [category]
-  );
+const toolCategoryButtons = [
+  ["✍️ Writing & Chat", "Writing & Chat"],
+  ["🎨 Image & Design", "Image & Design"],
+  ["🎬 Video & Reels", "Video & Reels"],
+  ["🎙️ Voice & Audio", "Voice & Audio"],
+  ["💻 Coding", "Coding"],
+  ["🔎 Research", "Research"],
+  ["🧩 AI Models", "AI Models"],
+  ["⚙️ AI Automation", "AI Automation"],
+  ["📊 Productivity", "Productivity"]
+];
 
-  // If the exact category has no published items, give the member useful
-  // recent content instead of returning an empty-looking result.
-  if (!rows.length) {
-    const fallback = await pool.query(
-      `SELECT title, body, source_url, category
-       FROM content
-       WHERE status = 'published'
-       ORDER BY published_at DESC NULLS LAST, id DESC
-       LIMIT 5`
-    );
-    rows = fallback.rows;
+async function sendTelegramToolsMenu(chatId) {
+  const keyboard = toolCategoryButtons.map(([label, category]) => [
+    { text: label, callback_data: `tools:cat:${category}` }
+  ]);
+  keyboard.push([
+    { text: "🔥 Trending AI Tools", callback_data: "tools:trending" },
+    { text: "📋 All AI Tools", callback_data: "tools:all" }
+  ]);
+  keyboard.push([
+    { text: "🔎 Search AI Tools", callback_data: "tools:search" },
+    { text: "⬅️ Main Menu", callback_data: "menu:home" }
+  ]);
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text:
+      "🤖 <b>AI Tools</b>\n\n" +
+      "Choose a category. I will show the tool name, what it does, current plan information and the official website. Approved affiliate links are used when available.",
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function sendTelegramTools(chatId, category = null) {
+  const params = [];
+  let where = "WHERE active = 1";
+  if (category) {
+    params.push(category);
+    where += " AND category = $1";
   }
 
-  const lines = [
-    `<b>${escapeTelegramHtml(labels[command])}</b>`,
-    rows.length
-      ? "Here are the latest available items:"
-      : "There are no published items yet. New items will appear here automatically."
-  ];
+  const { rows } = await pool.query(
+    `SELECT t.*, a.affiliate_url, a.disclosure
+     FROM ai_tools t
+     LEFT JOIN affiliate a ON a.id = t.affiliate_id AND a.active = 1
+     ${where}
+     ORDER BY t.name ASC
+     LIMIT 12`,
+    params
+  );
 
-  for (const item of rows) {
-    const body = String(item.body || "").trim().slice(0, 700);
+  const title = category ? `🤖 <b>AI Tools — ${escapeTelegramHtml(category)}</b>` : "🤖 <b>All AI Tools</b>";
+  const lines = [title, rows.length ? "Available tools:" : "No tools are listed in this category yet."];
+
+  for (const tool of rows) {
     lines.push(
-      `\n<b>• ${escapeTelegramHtml(item.title)}</b>` +
-      (item.category ? `\n🏷️ ${escapeTelegramHtml(item.category)}` : "") +
-      (body ? `\n${escapeTelegramHtml(body)}` : "") +
-      (item.source_url ? `\n🔗 <a href="${escapeTelegramHtml(item.source_url)}">Source / Apply</a>` : "")
+      `\n<b>• ${escapeTelegramHtml(tool.name)}</b>` +
+      `\n${escapeTelegramHtml(tool.description)}` +
+      `\n💳 ${escapeTelegramHtml(tool.pricing || "Check website")}` +
+      `\n🆓 ${escapeTelegramHtml(tool.free_tier || "Check website")}` +
+      `\n🔗 <a href="${escapeTelegramHtml(tool.affiliate_url || tool.url)}">Open ${escapeTelegramHtml(tool.name)}</a>` +
+      (tool.affiliate_url ? `\nℹ️ ${escapeTelegramHtml(tool.disclosure || "Affiliate link")}` : "")
     );
   }
-
-  lines.push(
-    "\nUse the buttons below to switch services.",
-  );
 
   await telegram("sendMessage", {
     chat_id: chatId,
@@ -3019,18 +3098,156 @@ async function sendTelegramCategory(chatId, command) {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "🤖 AI Tools", callback_data: "menu:tools" },
-          { text: "💼 AI Jobs", callback_data: "menu:jobs" }
+          { text: "🤖 Tool Categories", callback_data: "menu:tools" },
+          { text: "🔎 Search", callback_data: "tools:search" }
         ],
         [
-          { text: "🎁 Free Resources", callback_data: "menu:free" },
-          { text: "🧠 Learn AI", callback_data: "menu:learn" }
-        ],
-        [
-          { text: "⭐ Premium", callback_data: "menu:premium" }
+          { text: "⬅️ Main Menu", callback_data: "menu:home" }
         ]
       ]
     }
+  });
+}
+
+async function searchTelegramTools(chatId, query) {
+  const clean = String(query || "").trim();
+  if (!clean) {
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: "🔎 <b>Search AI Tools</b>\n\nSend a message such as:\n• AI video generator\n• AI coding tool\n• free image generator\n• AI voice tool",
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "⬅️ AI Tools", callback_data: "menu:tools" }]]
+      }
+    });
+    return;
+  }
+
+  const terms = clean.toLowerCase().split(/\\s+/).filter(Boolean).slice(0, 8);
+  const conditions = terms.map((_, i) => `(LOWER(name) LIKE $${i+1} OR LOWER(category) LIKE $${i+1} OR LOWER(description) LIKE $${i+1})`);
+  const values = terms.map(term => `%${term}%`);
+
+  const { rows } = await pool.query(
+    `SELECT t.*, a.affiliate_url, a.disclosure
+     FROM ai_tools t
+     LEFT JOIN affiliate a ON a.id = t.affiliate_id AND a.active = 1
+     WHERE t.active = 1 AND (${conditions.join(" OR ")})
+     ORDER BY t.name ASC LIMIT 8`,
+    values
+  );
+
+  if (!rows.length) {
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: `🔎 No matching AI tools found for <b>${escapeTelegramHtml(clean)}</b>.\n\nTry: AI video, coding, image, voice, research, automation.`,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [[{ text: "🤖 AI Tools", callback_data: "menu:tools" }]] }
+    });
+    return;
+  }
+
+  const lines = [`🔎 <b>AI Tool Search</b>\nResults for: ${escapeTelegramHtml(clean)}`];
+  for (const tool of rows) {
+    lines.push(
+      `\n<b>• ${escapeTelegramHtml(tool.name)}</b> — ${escapeTelegramHtml(tool.category)}` +
+      `\n${escapeTelegramHtml(tool.description)}` +
+      `\n🔗 <a href="${escapeTelegramHtml(tool.affiliate_url || tool.url)}">Open tool</a>`
+    );
+  }
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: lines.join("\n"),
+    parse_mode: "HTML",
+    disable_web_page_preview: false,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🤖 AI Tools", callback_data: "menu:tools" }],
+        [{ text: "⬅️ Main Menu", callback_data: "menu:home" }]
+      ]
+    }
+  });
+}
+
+async function sendTelegramCategory(chatId, command) {
+  const categories = {
+    jobs: "AI Jobs",
+    free: "Free Resources",
+    learn: "AI Tutorials"
+  };
+  const labels = {
+    jobs: "💼 AI Jobs",
+    free: "🎁 Free AI Resources",
+    learn: "🧠 Learn AI"
+  };
+
+  const category = categories[command];
+  if (!category) {
+    if (command === "tools") return sendTelegramToolsMenu(chatId);
+    if (command === "search") {
+      await telegram("sendMessage", {
+        chat_id: chatId,
+        text: "🔎 <b>Search</b>\n\nSend what you are looking for, for example: <i>AI video generator for Shorts</i>.",
+        parse_mode: "HTML"
+      });
+      return;
+    }
+    if (command === "trending") {
+      const { rows } = await pool.query(
+        `SELECT title, body, source_url, category
+         FROM content WHERE status='published'
+         ORDER BY published_at DESC NULLS LAST, id DESC LIMIT 8`
+      );
+      const lines = ["🔥 <b>Trending</b>", rows.length ? "Latest published items:" : "Nothing published yet."];
+      for (const item of rows) {
+        lines.push(`\n<b>• ${escapeTelegramHtml(item.title)}</b>\n🏷️ ${escapeTelegramHtml(item.category || "")}\n${escapeTelegramHtml(String(item.body || "").slice(0,500))}${item.source_url ? `\n🔗 <a href="${escapeTelegramHtml(item.source_url)}">Open</a>` : ""}`);
+      }
+      await telegram("sendMessage",{chat_id:chatId,text:lines.join("\n"),parse_mode:"HTML",disable_web_page_preview:false,reply_markup:telegramMenuKeyboard()});
+      return;
+    }
+    if (command === "opportunities" || command === "android") {
+      return sendTelegramCategory(chatId, command === "android" ? "free" : "jobs");
+    }
+    return;
+  }
+
+  let { rows } = await pool.query(
+    `SELECT title, body, source_url, category
+     FROM content
+     WHERE status = 'published' AND category = $1
+     ORDER BY published_at DESC NULLS LAST, id DESC
+     LIMIT 8`,
+    [category]
+  );
+
+  if (!rows.length) {
+    rows = (await pool.query(
+      `SELECT title, body, source_url, category FROM content
+       WHERE status = 'published'
+       ORDER BY published_at DESC NULLS LAST, id DESC LIMIT 5`
+    )).rows;
+  }
+
+  const lines = [`<b>${labels[command]}</b>`, rows.length ? "Here are the latest available items:" : "No published items yet."];
+  for (const item of rows) {
+    lines.push(
+      `\n<b>• ${escapeTelegramHtml(item.title)}</b>` +
+      (item.category ? `\n🏷️ ${escapeTelegramHtml(item.category)}` : "") +
+      (item.body ? `\n${escapeTelegramHtml(String(item.body).slice(0,700))}` : "") +
+      (item.source_url ? `\n🔗 <a href="${escapeTelegramHtml(item.source_url)}">Source / Apply</a>` : "")
+    );
+  }
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: lines.join("\n"),
+    parse_mode: "HTML",
+    disable_web_page_preview: false,
+    reply_markup: { inline_keyboard: [
+      [{ text: "🤖 AI Tools", callback_data: "menu:tools" }, { text: "💼 AI Jobs", callback_data: "menu:jobs" }],
+      [{ text: "🎁 Free Resources", callback_data: "menu:free" }, { text: "🧠 Learn AI", callback_data: "menu:learn" }],
+      [{ text: "⭐ Premium", callback_data: "menu:premium" }, { text: "⬅️ Main Menu", callback_data: "menu:home" }]
+    ]}
   });
 }
 
@@ -3116,46 +3333,28 @@ async function handleTelegramUpdate(update) {
       const query = update.callback_query;
       const data = String(query.data || "");
       const chatId = query.message?.chat?.id || query.from?.id;
+      await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "Loading..." });
 
-      // Telegram keeps a callback button in a loading state until the bot
-      // answers the callback query.
-      await telegram("answerCallbackQuery", {
-        callback_query_id: query.id,
-        text: "Loading..."
-      });
-
-      if (data === "menu:home") {
-        await sendTelegramHome(chatId);
-        return;
+      if (data === "menu:home") return sendTelegramHome(chatId);
+      if (data === "menu:tools") return sendTelegramToolsMenu(chatId);
+      if (data === "tools:all") return sendTelegramTools(chatId);
+      if (data === "tools:trending") return sendTelegramTools(chatId);
+      if (data === "tools:search") return searchTelegramTools(chatId, "");
+      if (data.startsWith("tools:cat:")) return sendTelegramTools(chatId, data.slice("tools:cat:".length));
+      if (data === "menu:search") {
+        return searchTelegramTools(chatId, "");
       }
+      if (data === "menu:trending") return sendTelegramCategory(chatId, "trending");
+      if (data === "menu:premium") return sendTelegramPremium(chatId);
 
       if (data.startsWith("buy:")) {
         const productId = Number(data.split(":")[1]);
-        const { rows } = await pool.query(
-          "SELECT * FROM premium_products WHERE id = $1 AND active = 1 LIMIT 1",
-          [productId]
-        );
-        if (!rows.length) {
-          await telegram("sendMessage", {
-            chat_id: chatId,
-            text: "That premium product is no longer available."
-          });
-          return;
-        }
-        await sendPremiumInvoice(chatId, rows[0]);
-        return;
+        const { rows } = await pool.query("SELECT * FROM premium_products WHERE id=$1 AND active=1 LIMIT 1",[productId]);
+        if (!rows.length) return telegram("sendMessage",{chat_id:chatId,text:"That premium product is no longer available."});
+        return sendPremiumInvoice(chatId, rows[0]);
       }
 
-      if (data.startsWith("menu:")) {
-        const command = data.split(":")[1];
-        if (command === "premium") {
-          await sendTelegramPremium(chatId);
-          return;
-        }
-        await sendTelegramCategory(chatId, command);
-        return;
-      }
-
+      if (data.startsWith("menu:")) return sendTelegramCategory(chatId, data.slice("menu:".length));
       return;
     }
 
@@ -3165,69 +3364,29 @@ async function handleTelegramUpdate(update) {
     if (message.successful_payment) {
       const payload = String(message.successful_payment.invoice_payload || "");
       if (!payload.startsWith("premium:")) return;
-
       const productId = Number(payload.split(":")[1]);
-      const { rows } = await pool.query(
-        "SELECT * FROM premium_products WHERE id = $1 AND active = 1 LIMIT 1",
-        [productId]
-      );
+      const { rows } = await pool.query("SELECT * FROM premium_products WHERE id=$1 AND active=1 LIMIT 1",[productId]);
       if (!rows.length) return;
-
-      await telegram("sendMessage", {
-        chat_id: message.chat.id,
-        text:
-          `💳 <b>Payment received</b>\n\n<b>${escapeTelegramHtml(rows[0].title)}</b>\n\n${escapeTelegramHtml(rows[0].content)}`,
-        parse_mode: "HTML"
+      return telegram("sendMessage",{
+        chat_id:message.chat.id,
+        text:`💳 <b>Payment received</b>\n\n<b>${escapeTelegramHtml(rows[0].title)}</b>\n\n${escapeTelegramHtml(rows[0].content)}`,
+        parse_mode:"HTML",
+        reply_markup:telegramMenuKeyboard()
       });
-      return;
     }
 
-    const textMessage = String(message.text || "").trim().split(" ")[0].toLowerCase();
+    const rawText = String(message.text || "").trim();
+    const command = rawText.split(/\\s+/)[0].toLowerCase();
 
-    if (textMessage === "/start" || textMessage === "/help") {
-      await sendTelegramHome(message.chat.id);
-      return;
-    }
+    if (command === "/start" || command === "/help") return sendTelegramHome(message.chat.id);
+    if (command === "/tools") return sendTelegramToolsMenu(message.chat.id);
+    if (command === "/jobs") return sendTelegramCategory(message.chat.id, "jobs");
+    if (command === "/free") return sendTelegramCategory(message.chat.id, "free");
+    if (command === "/learn") return sendTelegramCategory(message.chat.id, "learn");
+    if (command === "/premium") return sendTelegramPremium(message.chat.id);
 
-    const commandMap = {
-      "/tools": "tools",
-      "/jobs": "jobs",
-      "/free": "free",
-      "/learn": "learn"
-    };
-
-    if (commandMap[textMessage]) {
-      await sendTelegramCategory(message.chat.id, commandMap[textMessage]);
-      return;
-    }
-
-    if (textMessage === "/premium") {
-      await sendTelegramPremium(message.chat.id);
-      return;
-    }
-
-    // Give every unknown message a useful response instead of silently ignoring it.
-    await telegram("sendMessage", {
-      chat_id: message.chat.id,
-      text:
-        "I can help you access AI services.\n\n" +
-        "Use /start or choose a service below:",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "🤖 AI Tools", callback_data: "menu:tools" },
-            { text: "💼 AI Jobs", callback_data: "menu:jobs" }
-          ],
-          [
-            { text: "🎁 Free Resources", callback_data: "menu:free" },
-            { text: "🧠 Learn AI", callback_data: "menu:learn" }
-          ],
-          [
-            { text: "⭐ Premium", callback_data: "menu:premium" }
-          ]
-        ]
-      }
-    });
+    // Free-text messages act as AI tool search.
+    if (rawText) return searchTelegramTools(message.chat.id, rawText);
   } catch (error) {
     console.error("Telegram update error:", error.message);
   }
