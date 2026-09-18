@@ -398,7 +398,6 @@ function extractArticles(html, sourceUrl) {
     if (sourceHost.includes("huggingface.co")) {
       return path.startsWith("/blog/") && path.split("/").filter(Boolean).length >= 3;
     }
-
     if (sourceHost.includes("blog.google")) {
       return path.includes("/innovation-and-ai/");
     }
@@ -586,7 +585,7 @@ app.get("/api/admin/cleanup-rejected", requireAdmin, async (req, res) => {
   }
 });
 app.get("/admin", (req, res) => {
-  res.type("html").send("<!doctype html>\n<html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>AI Opportunity Hub Admin</title>\n<style>\n:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f4f7fb;color:#10233f}\n*{box-sizing:border-box}body{margin:0}.top{background:#0b63ce;color:#fff;padding:20px 16px;position:sticky;top:0;z-index:5}\nh1{font-size:22px;margin:0 0 4px}.muted{opacity:.8;font-size:13px}main{max-width:900px;margin:auto;padding:14px}\n.card{background:#fff;border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 3px 14px #10233f14}\n.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.stat{padding:14px;border:1px solid #e2eaf4;border-radius:12px}.num{font-size:25px;font-weight:800}\ninput{width:100%;padding:12px;border:1px solid #ccd8e7;border-radius:10px;margin:7px 0 10px;font-size:15px}\nbutton{border:0;border-radius:10px;padding:11px 14px;font-weight:700;cursor:pointer;margin:4px 4px 4px 0;background:#0b63ce;color:#fff}\nbutton.secondary{background:#e8f1fc;color:#0b63ce}button.danger{background:#c62828}.item{border-top:1px solid #edf1f6;padding:13px 0}.item:first-child{border-top:0}\n.badge{display:inline-block;border-radius:20px;padding:4px 8px;font-size:12px;background:#edf4ff;color:#0b63ce;margin:3px 3px 3px 0}\n.post{white-space:pre-wrap;background:#f7f9fc;border-radius:10px;padding:12px;margin-top:8px;font-size:14px}\n.ok{color:#16803c}.err{color:#c62828}@media(min-width:700px){.grid{grid-template-columns:repeat(4,1fr)}}\n</style></head>\n<body><header class=\"top\"><h1>🤖 AI Opportunity Hub</h1><div class=\"muted\">Mobile Admin Dashboard</div></header>\n<main>\n<section class=\"card\"><strong>Admin access</strong><input id=\"key\" type=\"password\" placeholder=\"Enter dashboard admin key\">\n<button onclick=\"saveKey()\">Save key</button><button class=\"secondary\" onclick=\"loadAll()\">Refresh</button><div id=\"msg\" class=\"muted\"></div></section>\n<section class=\"card\"><div id=\"stats\" class=\"grid\"><div>Loading…</div></div></section>\n<section class=\"card\"><h2>📝 Drafts</h2><div id=\"drafts\">Loading…</div></section>\n<section class=\"card\"><h2>📢 Recent posts</h2><div id=\"recent\">Loading…</div></section>\n</main>\n<script>\nconst keyEl=document.getElementById(\"key\");keyEl.value=sessionStorage.getItem(\"adminKey\")||\"\";\nfunction saveKey(){sessionStorage.setItem(\"adminKey\",keyEl.value.trim());loadAll();}\nfunction headers(){return {\"Content-Type\":\"application/json\",\"x-admin-key\":sessionStorage.getItem(\"adminKey\")||\"\"};}\nasync function api(url,opt={}){const r=await fetch(url,{...opt,headers:{...headers(),...(opt.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||(\"HTTP \"+r.status));return d;}\nasync function loadAll(){const msg=document.getElementById(\"msg\");msg.textContent=\"Loading…\";try{\nconst [dash,drafts]=await Promise.all([fetch(\"/api/dashboard\").then(r=>r.json()),fetch(\"/api/content?status=draft&limit=20\").then(r=>r.json())]);\ndocument.getElementById(\"stats\").innerHTML=[[\"Content\",dash.totals?.total_content||0],[\"Published\",dash.totals?.published||0],[\"Drafts\",dash.totals?.drafts||0],[\"Affiliate clicks\",dash.affiliates?.affiliate_clicks||0]].map(x=>\"<div class='stat'><div class='muted'>\"+x[0]+\"</div><div class='num'>\"+x[1]+\"</div></div>\").join(\"\");\ndocument.getElementById(\"drafts\").innerHTML=(drafts.content||[]).map(renderItem).join(\"\")||\"<div class='muted'>No drafts.</div>\";\ndocument.getElementById(\"recent\").innerHTML=(dash.recent||[]).map(x=>\"<div class='item'><strong>#\"+x.id+\" \"+esc(x.title)+\"</strong><br><span class='badge'>\"+esc(x.category||\"\")+\"</span><span class='badge'>\"+esc(x.status||\"\")+\"</span><span class='badge'>Score \"+(x.ai_score??0)+\"</span></div>\").join(\"\");\nmsg.textContent=\"Updated\";msg.className=\"ok\";\n}catch(e){msg.textContent=e.message;msg.className=\"err\";}}\nfunction renderItem(x){return \"<div class='item'><strong>#\"+x.id+\" \"+esc(x.title)+\"</strong><br><span class='badge'>\"+esc(x.category||\"\")+\"</span><span class='badge'>Score \"+(x.ai_score??0)+\"</span><div class='post'>\"+esc(x.body||\"\")+\"</div><div>\"+(Number(x.ai_score)>=75&&x.body&&!x.body.startsWith(\"Collected from \")?\"<button onclick='publish(\"+x.id+\")'>Publish</button>\":\"\")+\"<button class='secondary' onclick='editPost(\"+x.id+\")'>Edit</button><button class='danger' onclick='rejectPost(\"+x.id+\")'>Reject</button></div></div>\";}\nfunction esc(s){return String(s).replace(/[&<>\"']/g,m=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",'\"':\"&quot;\",\"'\":\"&#39;\"}[m]));}\nasync function publish(id){if(!confirm(\"Publish #\"+id+\" to Telegram?\"))return;try{await api(\"/api/content/\"+id+\"/publish\",{method:\"POST\"});loadAll();}catch(e){alert(e.message);}}\nasync function rejectPost(id){if(!confirm(\"Reject #\"+id+\"?\"))return;try{await api(\"/api/content/\"+id,{method:\"PATCH\",body:JSON.stringify({status:\"rejected\"})});loadAll();}catch(e){alert(e.message);}}\nasync function editPost(id){const body=prompt(\"Edit post text:\");if(body===null)return;try{await api(\"/api/content/\"+id,{method:\"PATCH\",body:JSON.stringify({body})});loadAll();}catch(e){alert(e.message);}}\nloadAll();\n</script></body></html>");
+  res.type("html").send("<!doctype html>\n<html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>AI Opportunity Hub Admin</title>\n<style>\n:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f4f7fb;color:#10233f}\n*{box-sizing:border-box}body{margin:0}.top{background:#0b63ce;color:#fff;padding:20px 16px;position:sticky;top:0;z-index:5}\nh1{font-size:22px;margin:0 0 4px}.muted{opacity:.8;font-size:13px}main{max-width:900px;margin:auto;padding:14px}\n.card{background:#fff;border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 3px 14px #10233f14}\n.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.stat{padding:14px;border:1px solid #e2eaf4;border-radius:12px}.num{font-size:25px;font-weight:800}\ninput{width:100%;padding:12px;border:1px solid #ccd8e7;border-radius:10px;margin:7px 0 10px;font-size:15px}\nbutton{border:0;border-radius:10px;padding:11px 14px;font-weight:700;cursor:pointer;margin:4px 4px 4px 0;background:#0b63ce;color:#fff}\nbutton.secondary{background:#e8f1fc;color:#0b63ce}button.danger{background:#c62828}.item{border-top:1px solid #edf1f6;padding:13px 0}.item:first-child{border-top:0}\n.badge{display:inline-block;border-radius:20px;padding:4px 8px;font-size:12px;background:#edf4ff;color:#0b63ce;margin:3px 3px 3px 0}\n.post{white-space:pre-wrap;background:#f7f9fc;border-radius:10px;padding:12px;margin-top:8px;font-size:14px}\n.ok{color:#16803c}.err{color:#c62828}@media(min-width:700px){.grid{grid-template-columns:repeat(4,1fr)}}\n</style></head>\n<body><header class=\"top\"><h1>🤖 AI Opportunity Hub</h1><div class=\"muted\">Mobile Admin Dashboard</div></header>\n<main>\n<section class=\"card\"><strong>Admin access</strong><input id=\"key\" type=\"password\" placeholder=\"Enter dashboard admin key\">\n<button onclick=\"saveKey()\">Save key</button><button class=\"secondary\" onclick=\"loadAll()\">Refresh</button><div id=\"msg\" class=\"muted\"></div></section>\n<section class=\"card\"><div id=\"stats\" class=\"grid\"><div>Loading…</div></div></section>\n<section class=\"card\"><h2>📝 Drafts</h2><div id=\"drafts\">Loading…</div></section>\n<section class=\"card\"><h2>📢 Recent posts</h2><div id=\"recent\">Loading…</div></section>\n</main>\n<script>\nconst keyEl=document.getElementById(\"key\");keyEl.value=sessionStorage.getItem(\"adminKey\")||\"\";\nfunction saveKey(){sessionStorage.setItem(\"adminKey\",keyEl.value.trim());loadAll();}\nfunction headers(){return {\"Content-Type\":\"application/json\",\"x-admin-key\":sessionStorage.getItem(\"adminKey\")||\"\"};}\nasync function api(url,opt={}){const r=await fetch(url,{...opt,headers:{...headers(),...(opt.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||(\"HTTP \"+r.status));return d;}\nasync function loadAll(){const msg=document.getElementById(\"msg\");msg.textContent=\"Loading…\";try{\nconst [dash,drafts]=await Promise.all([fetch(\"/api/dashboard\").then(r=>r.json()),fetch(\"/api/content?status=draft&limit=20\").then(r=>r.json())]);\ndocument.getElementById(\"stats\").innerHTML=[[\"Content\",dash.totals?.total_content||0],[\"Published\",dash.totals?.published||0],[\"Drafts\",dash.totals?.drafts||0],[\"Affiliate clicks\",dash.affiliates?.affiliate_clicks||0]].map(x=>\"<div class='stat'><div class='muted'>\"+x[0]+\"</div><div class='num'>\"+x[1]+\"</div></div>\").join(\"\");\ndocument.getElementById(\"drafts\").innerHTML=(drafts.content||[]).map(renderItem).join(\"\")||\"<div class='muted'>No drafts.</div>\";\ndocument.getElementById(\"recent\").innerHTML=(dash.recent||[]).map(x=>\"<div class='item'><strong>#\"+x.id+\" \"+esc(x.title)+\"</strong><br><span class='badge'>\"+esc(x.category||\"\")+\"</span><span class='badge'>\"+esc(x.status||\"\")+\"</span><span class='badge'>Score \"+(x.ai_score??0)+\"</span></div>\").join(\"\");\nmsg.textContent=\"Updated\";msg.className=\"ok\";\n}catch(e){msg.textContent=e.message;msg.className=\"err\";}}\nfunction renderItem(x){return \"<div class='item'><strong>#\"+x.id+\" \"+esc(x.title)+\"</strong><br><span class='badge'>\"+esc(x.category||\"\")+\"</span><span class='badge'>Score \"+(x.ai_score??0)+\"</span><div class='post'>\"+esc(x.body||\"\")+\"</div><div>\"+(Number(x.ai_score)>=75&&x.body&&!x.body.startsWith(\"Collected from \")?\"<button onclick='publish(\"+x.id+\")'>Publish</button>\":\"\")+\"<button class='secondary' onclick='editPost(\"+x.id+\")'>Edit</button><button class='danger' onclick='rejectPost(\"+x.id+\")'>Reject</button></div></div>\";}\nfunction searchContent(){loadAll();}\nfunction clearSearch(){const el=document.getElementById("search");if(el)el.value="";loadAll();}\nfunction esc(s){return String(s).replace(/[&<>\"']/g,m=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",'\"':\"&quot;\",\"'\":\"&#39;\"}[m]));}\nasync function publish(id){if(!confirm(\"Publish #\"+id+\" to Telegram?\"))return;try{await api(\"/api/content/\"+id+\"/publish\",{method:\"POST\"});loadAll();}catch(e){alert(e.message);}}\nasync function rejectPost(id){if(!confirm(\"Reject #\"+id+\"?\"))return;try{await api(\"/api/content/\"+id,{method:\"PATCH\",body:JSON.stringify({status:\"rejected\"})});loadAll();}catch(e){alert(e.message);}}\nasync function editPost(id){const body=prompt(\"Edit post text:\");if(body===null)return;try{await api(\"/api/content/\"+id,{method:\"PATCH\",body:JSON.stringify({body})});loadAll();}catch(e){alert(e.message);}}\nloadAll();\n</script></body></html>");
 });
 
 app.get("/", (req, res) => {
@@ -770,6 +769,7 @@ app.get("/api/content", async (req, res) => {
     const {
       category,
       status,
+      q,
       limit = 50
     } = req.query;
 
@@ -790,6 +790,13 @@ app.get("/api/content", async (req, res) => {
       );
     }
 
+    if (q && String(q).trim()) {
+      values.push("%" + String(q).trim() + "%");
+      conditions.push(
+        "(CAST(id AS TEXT) ILIKE $" + values.length + " OR title ILIKE $" + values.length + " OR body ILIKE $" + values.length + ")"
+      );
+    }
+
     const safeLimit = Math.min(
       Math.max(
         parseInt(limit, 10) || 50,
@@ -797,7 +804,6 @@ app.get("/api/content", async (req, res) => {
       ),
       100
     );
-
     values.push(safeLimit);
 
     const where =
@@ -1197,8 +1203,7 @@ ${identityRule}
           role: "user",
           content: prompt
         }
-      ],
-      temperature: 0.2,
+      ],      temperature: 0.2,
       max_tokens: 350
     })
   });
@@ -1597,7 +1602,6 @@ app.get("/go/affiliate/:id", async (req, res) => {
        LIMIT 1`,
       [req.params.id]
     );
-
     if (!result.rows.length) {
       return res.status(404).send("Affiliate link not found");
     }
@@ -1997,7 +2001,6 @@ async function scoreContentWithAI(content) {
   const title = String(content.title || "");
   const lowerTitle = title.toLowerCase();
   const isWellfound = source.toLowerCase().includes("wellfound");
-
   const aiJobPatterns = [
     /\bai\b/i,
     /artificial intelligence/i,
@@ -2398,7 +2401,6 @@ app.get("/api/ai/generate/:id", async (req, res) => {
         score: Number(content.ai_score)
       });
     }
-
     let generatedPost = await generateContentWithAI(content);
     generatedPost = await addAffiliateTrackingToPost(generatedPost, content);
 
@@ -2797,8 +2799,7 @@ app.get("/api/dashboard", async (req, res) => {
   try {
     const totals = await pool.query(`
       SELECT
-        COUNT(*)::int AS total_content,
-        COUNT(*) FILTER (WHERE status = 'published')::int AS published,
+        COUNT(*)::int AS total_content,        COUNT(*) FILTER (WHERE status = 'published')::int AS published,
         COUNT(*) FILTER (WHERE status = 'draft')::int AS drafts,
         COUNT(*) FILTER (WHERE ai_score >= 75)::int AS approved
       FROM content
@@ -2970,7 +2971,6 @@ async function runAutomationCycle() {
          AND body IS NOT NULL
          AND body <> ''
          AND body NOT LIKE 'Collected from %'
-         AND category <> 'Digital Opportunities'
        ORDER BY ai_score DESC, id DESC
        LIMIT 3`
     );
