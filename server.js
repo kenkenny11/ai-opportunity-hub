@@ -3230,7 +3230,7 @@ async function startServer() {
       }
 
       if (process.env.PUBLIC_BASE_URL && BOT_TOKEN) {
-        const webhookUrl = `${process.env.PUBLIC_BASE_URL.replace(/\\/$/, "")}/telegram/webhook`;
+        const webhookUrl = `${process.env.PUBLIC_BASE_URL.endsWith("/") ? process.env.PUBLIC_BASE_URL.slice(0, -1) : process.env.PUBLIC_BASE_URL}/telegram/webhook`;
         telegram("setWebhook", {
           url: webhookUrl,
           ...(process.env.TELEGRAM_WEBHOOK_SECRET ? { secret_token: process.env.TELEGRAM_WEBHOOK_SECRET } : {})
