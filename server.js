@@ -2956,6 +2956,21 @@ async function handleTelegramUpdate(update) {
       });
       return;
     }
+    if (update.callback_query) {
+      const query = update.callback_query;
+      await telegram("answerCallbackQuery", { callback_query_id: query.id });
+      const data = String(query.data || "");
+      if (data.startsWith("buy:")) {
+        const productId = Number(data.split(":")[1]);
+        const { rows } = await pool.query(
+          "SELECT * FROM premium_products WHERE id = $1 AND active = 1 LIMIT 1",
+          [productId]
+        );
+        if (rows.length) await sendPremiumInvoice(query.from.id, rows[0]);
+      }
+      return;
+    }
+
     const message = update.message;
     if (message?.successful_payment) {
       const payload = String(message.successful_payment.invoice_payload || "");
@@ -3005,11 +3020,6 @@ async function handleTelegramUpdate(update) {
 app.post("/telegram/webhook", async (req, res) => {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
   if (secret && req.get("x-telegram-bot-api-secret-token") !== secret) return res.status(401).json({ error: "Unauthorized" });
-  res.sendStatus(200);
-  await handleTelegramUpdate(req.body);
-});
-
-app.post("/telegram/webhook", async (req, res) => {
   res.sendStatus(200);
   await handleTelegramUpdate(req.body);
 });
@@ -3205,6 +3215,20 @@ async function startServer() {
       console.log(
         `AI Opportunity Hub running on port ${PORT}`
       );
+      if (BOT_TOKEN) {
+        telegram("setMyCommands", {
+          commands: [
+            { command: "start", description: "Start AI Opportunity Hub" },
+            { command: "tools", description: "Find useful AI tools" },
+            { command: "jobs", description: "AI jobs and opportunities" },
+            { command: "free", description: "Free AI resources" },
+            { command: "learn", description: "AI tutorials" },
+            { command: "premium", description: "Premium resources" },
+            { command: "help", description: "Get help" }
+          ]
+        }).catch((error) => console.error("Telegram commands setup failed:", error.message));
+      }
+
       if (process.env.PUBLIC_BASE_URL && BOT_TOKEN) {
         const webhookUrl = `${process.env.PUBLIC_BASE_URL.replace(/\\/$/, "")}/telegram/webhook`;
         telegram("setWebhook", {
