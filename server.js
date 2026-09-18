@@ -1156,6 +1156,92 @@ ${identityRule}
   return cleanGeneratedPost(raw);
 }
 
+async function generateAffiliatePartnerDrafts(limit = 3) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 3, 1), 10);
+
+  const { rows: affiliates } = await pool.query(
+    `SELECT *
+     FROM affiliate
+     WHERE active = 1
+       AND affiliate_url IS NOT NULL
+       AND affiliate_url <> ''
+     ORDER BY id ASC
+     LIMIT $1`,
+    [safeLimit]
+  );
+
+  const results = [];
+
+  for (const affiliate of affiliates) {
+    const title = `🤖 ${affiliate.product || affiliate.company}: AI Opportunity Hub Partner Pick`;
+
+    const duplicate = await pool.query(
+      `SELECT id, status
+       FROM content
+       WHERE LOWER(title) = LOWER($1)
+       LIMIT 1`,
+      [title]
+    );
+
+    if (duplicate.rows.length) {
+      results.push({
+        affiliate_id: affiliate.id,
+        created: false,
+        duplicate: true,
+        content_id: duplicate.rows[0].id,
+        status: duplicate.rows[0].status
+      });
+      continue;
+    }
+
+    try {
+      const aiPost = await generateAffiliatePostWithAI(affiliate);
+
+      const inserted = await pool.query(
+        `INSERT INTO content
+         (title, body, category, source, source_url, ai_score, status)
+         VALUES ($1, $2, 'Digital Opportunities', $3, $4, 75, 'draft')
+         RETURNING *`,
+        [
+          title,
+          aiPost,
+          affiliate.company || affiliate.product || "Partner",
+          affiliate.url || affiliate.affiliate_url || ""
+        ]
+      );
+
+      const row = inserted.rows[0];
+      const trackedBody = `${aiPost.trim()}
+
+🔗 Check it out: https://ai-opportunity-hub.onrender.com/go/affiliate/${affiliate.id}?content_id=${row.id}
+ℹ️ ${affiliate.disclosure || "Affiliate link"}`;
+
+      await pool.query(
+        "UPDATE content SET body = $1 WHERE id = $2",
+        [trackedBody, row.id]
+      );
+
+      results.push({
+        affiliate_id: affiliate.id,
+        created: true,
+        content_id: row.id,
+        status: "draft"
+      });
+    } catch (error) {
+      results.push({
+        affiliate_id: affiliate.id,
+        created: false,
+        error: error.message
+      });
+    }
+  }
+
+  return {
+    processed: affiliates.length,
+    results
+  };
+}
+
 app.get("/api/affiliate/:id/content/preview", async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -2624,6 +2710,9 @@ async function runAutomationCycle() {
     const collectResult = await collectResponse.json();
     console.log("Collector:", collectResult.total_saved ?? collectResult.error);
 
+    const affiliateAutomation = await generateAffiliatePartnerDrafts(3);
+    console.log("Affiliate automation:", affiliateAutomation);
+
     const scoreResult = await pool.query(
       `SELECT *
        FROM content
@@ -2689,6 +2778,7 @@ async function runAutomationCycle() {
          AND body IS NOT NULL
          AND body <> ''
          AND body NOT LIKE 'Collected from %'
+         AND category <> 'Digital Opportunities'
        ORDER BY ai_score DESC, id DESC
        LIMIT 3`
     );
@@ -2727,6 +2817,7 @@ async function runAutomationCycle() {
 
     return {
       collected: collectResult,
+      affiliate_automation: affiliateAutomation,
       scored,
       generated,
       published
