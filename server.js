@@ -139,7 +139,8 @@ async function initializeDatabase() {
       1
     WHERE NOT EXISTS (
       SELECT 1 FROM affiliate WHERE LOWER(company) = 'twin'
-    );
+    )`
+  );
 
   await pool.query(
     `INSERT INTO affiliate (
