@@ -318,7 +318,11 @@ function extractArticles(html, sourceUrl) {
     }
 
     const href = $(element).attr("href");
-    const rawText = $(element).text();
+    const headingText = $(element)
+      .find("h1, h2, h3, h4, h5, h6")
+      .first()
+      .text();
+    const rawText = headingText || $(element).text();
 
     if (!href || !rawText) {
       return;
