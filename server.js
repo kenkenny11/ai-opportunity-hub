@@ -3103,6 +3103,25 @@ async function handleTelegramUpdate(update) {
   }
 }
 
+app.get("/telegram/diagnostics", async (req, res) => {
+  try {
+    const webhook = await telegram("getWebhookInfo");
+    const me = await telegram("getMe");
+    res.json({
+      ok: true,
+      bot: me.result?.username,
+      webhook: {
+        url: webhook.result?.url || "",
+        pending_update_count: webhook.result?.pending_update_count || 0,
+        last_error_date: webhook.result?.last_error_date || null,
+        last_error_message: webhook.result?.last_error_message || null
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.post("/telegram/webhook", async (req, res) => {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
   if (secret && req.get("x-telegram-bot-api-secret-token") !== secret) return res.status(401).json({ error: "Unauthorized" });
