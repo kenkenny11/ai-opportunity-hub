@@ -1663,6 +1663,133 @@ app.get(
   }
 );
 
+async function runAutomationCycle() {
+  console.log("Starting automation cycle...");
+
+  try {
+    const collectResponse = await fetch(
+      `http://127.0.0.1:${PORT}/api/collect`
+    );
+    const collectResult = await collectResponse.json();
+    console.log("Collector:", collectResult.total_saved ?? collectResult.error);
+
+    const scoreResult = await pool.query(
+      `SELECT *
+       FROM content
+       WHERE status = 'draft'
+         AND (ai_score IS NULL OR ai_score = 0)
+       ORDER BY id DESC
+       LIMIT 10`
+    );
+
+    let scored = 0;
+    for (const content of scoreResult.rows) {
+      try {
+        const evaluation = await scoreContentWithAI(content);
+
+        await pool.query(
+          `UPDATE content
+           SET ai_score = $1,
+               category = $2
+           WHERE id = $3`,
+          [evaluation.score, evaluation.category, content.id]
+        );
+
+        scored++;
+        console.log(`Scored #${content.id}: ${evaluation.score}`);
+      } catch (error) {
+        console.error(`Scoring #${content.id} failed:`, error.message);
+      }
+    }
+
+    const generateResult = await pool.query(
+      `SELECT *
+       FROM content
+       WHERE status = 'draft'
+         AND ai_score >= 75
+         AND (body IS NULL OR body = '' OR body LIKE 'Collected from %')
+       ORDER BY ai_score DESC, id DESC
+       LIMIT 5`
+    );
+
+    let generated = 0;
+    for (const content of generateResult.rows) {
+      try {
+        const post = await generateContentWithAI(content);
+
+        await pool.query(
+          "UPDATE content SET body = $1 WHERE id = $2",
+          [post, content.id]
+        );
+
+        generated++;
+        console.log(`Generated #${content.id}`);
+      } catch (error) {
+        console.error(`Generation #${content.id} failed:`, error.message);
+      }
+    }
+
+    const publishResult = await pool.query(
+      `SELECT *
+       FROM content
+       WHERE status = 'draft'
+         AND ai_score >= 75
+         AND body IS NOT NULL
+         AND body <> ''
+         AND body NOT LIKE 'Collected from %'
+       ORDER BY ai_score DESC, id DESC
+       LIMIT 3`
+    );
+
+    let published = 0;
+    for (const content of publishResult.rows) {
+      try {
+        const telegramResult = await telegram("sendMessage", {
+          chat_id: CHANNEL_USERNAME,
+          text: content.body,
+          disable_web_page_preview: false
+        });
+
+        await pool.query(
+          `UPDATE content
+           SET status = 'published',
+               telegram_message_id = $1,
+               published_at = CURRENT_TIMESTAMP
+           WHERE id = $2
+             AND status = 'draft'`,
+          [telegramResult.result.message_id, content.id]
+        );
+
+        published++;
+        console.log(
+          `Published #${content.id} as Telegram message ${telegramResult.result.message_id}`
+        );
+      } catch (error) {
+        console.error(`Publishing #${content.id} failed:`, error.message);
+      }
+    }
+
+    console.log(
+      `Automation complete: scored=${scored}, generated=${generated}, published=${published}`
+    );
+
+    return {
+      collected: collectResult,
+      scored,
+      generated,
+      published
+    };
+  } catch (error) {
+    console.error("Automation cycle failed:", error);
+    return {
+      scored: 0,
+      generated: 0,
+      published: 0,
+      error: error.message
+    };
+  }
+}
+
 async function startServer() {
   try {
     await initializeDatabase();
