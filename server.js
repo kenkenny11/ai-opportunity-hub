@@ -1970,18 +1970,65 @@ async function scoreContentWithAI(content) {
     throw new Error("OPENROUTER_API_KEY is not configured");
   }
 
+  const source = String(content.source || "");
+  const title = String(content.title || "");
+  const lowerTitle = title.toLowerCase();
+  const isWellfound = source.toLowerCase().includes("wellfound");
+
+  const aiJobSignals = [
+    "ai", "artificial intelligence", "machine learning", "ml ",
+    "deep learning", "llm", "generative", "genai", "computer vision",
+    "nlp", "natural language", "robotics", "autonomous", "data science",
+    "data scientist", "ml engineer", "machine learning engineer",
+    "ai engineer", "ai platform", "applied ai", "machine intelligence"
+  ];
+
+  const wellfoundAiJob = aiJobSignals.some((signal) =>
+    lowerTitle.includes(signal)
+  );
+
+  const sourceRules = isWellfound
+    ? `
+WELLFOUND JOB RULES:
+- This source is a job source. The category MUST be "AI Jobs" when the listing is genuinely AI/ML-related.
+- A Wellfound listing is AI-related only when the title clearly contains an AI/ML signal such as AI, artificial intelligence, machine learning, ML, LLM, generative AI, NLP, computer vision, robotics, data science, or a clearly AI-specific engineering/research role.
+- Do NOT classify generic engineering, support, sales, account management, procurement, finance, operations, recycling, HR, marketing, or other non-AI roles as AI Jobs merely because the company may work in technology.
+- If the listing is not clearly AI-related, give it a score of 0-20, set category to "AI Jobs", and set publishable to false.
+- Never give an unrelated Wellfound job a score of 75 or higher.
+`
+    : `
+GENERAL SOURCE RULES:
+- Choose the category from the actual content and source context.
+- Do not label a job listing as AI News.
+- Do not label a job as an AI Tool, tutorial, or news item unless the source content clearly supports that category.
+`;
+
   const prompt = `You are the quality editor for AI Opportunity Hub, a Telegram channel about useful AI tools, jobs, digital opportunities, Android/AI apps, tutorials, AI news, and free resources.
 
 Evaluate this candidate:
-Title: ${content.title}
-Source: ${content.source}
+Title: ${title}
+Source: ${source}
 URL: ${content.source_url || ""}
+
+${sourceRules}
 
 Return ONLY valid JSON:
 {"score":0,"category":"AI News","reason":"short factual reason","publishable":false}
 
-Score using: usefulness 25, relevance 20, freshness 20, engagement potential 15, monetization potential 10, source quality 10.
-Set publishable=true only when score >= 75. Do not invent facts.`;
+Scoring dimensions:
+- Usefulness: 25
+- Relevance to AI Opportunity Hub: 20
+- Freshness: 20
+- Engagement potential: 15
+- Monetization potential: 10
+- Source quality: 10
+
+Important:
+- Relevance is mandatory. A candidate that is not genuinely relevant to the channel must score low even if the source is reputable.
+- Do not reward a reputable source for unrelated content.
+- Set publishable=true only when score >= 75.
+- Do not invent facts.
+`;
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -2013,8 +2060,8 @@ Set publishable=true only when score >= 75. Do not invent facts.`;
   if (!raw) throw new Error("OpenRouter returned no content");
 
   const cleaned = raw
-    .replace(/^\`\`\`json\s*/i, "")
-    .replace(/\s*\`\`\`$/i, "")
+    .replace(/^\\`\\`\\`json\\s*/i, "")
+    .replace(/\\s*\\`\\`\\`$/i, "")
     .trim();
 
   let parsed;
@@ -2022,12 +2069,12 @@ Set publishable=true only when score >= 75. Do not invent facts.`;
     parsed = JSON.parse(cleaned);
   } catch {
     const repaired = cleaned
-      .replace(/"score"\s*:\s*seventy\b/gi, '"score": 70')
-      .replace(/"score"\s*:\s*eighty\b/gi, '"score": 80')
-      .replace(/"score"\s*:\s*sixty\b/gi, '"score": 60')
-      .replace(/"score"\s*:\s*fifty\b/gi, '"score": 50')
-      .replace(/"score"\s*:\s*ninety\b/gi, '"score": 90')
-      .replace(/"score"\s*:\s*one hundred\b/gi, '"score": 100');
+      .replace(/"score"\\s*:\\s*seventy\\b/gi, '"score": 70')
+      .replace(/"score"\\s*:\\s*eighty\\b/gi, '"score": 80')
+      .replace(/"score"\\s*:\\s*sixty\\b/gi, '"score": 60')
+      .replace(/"score"\\s*:\\s*fifty\\b/gi, '"score": 50')
+      .replace(/"score"\\s*:\\s*ninety\\b/gi, '"score": 90')
+      .replace(/"score"\\s*:\\s*one hundred\\b/gi, '"score": 100');
     parsed = JSON.parse(repaired);
   }
 
@@ -2046,9 +2093,16 @@ Set publishable=true only when score >= 75. Do not invent facts.`;
   if (!Number.isFinite(score)) score = 0;
   score = Math.max(0, Math.min(100, Math.round(score)));
 
-  const category = allowedCategories.includes(parsed.category)
+  let category = allowedCategories.includes(parsed.category)
     ? parsed.category
     : "AI News";
+
+  if (isWellfound) {
+    category = "AI Jobs";
+    if (!wellfoundAiJob) {
+      score = Math.min(score, 20);
+    }
+  }
 
   return {
     score,
@@ -2057,8 +2111,6 @@ Set publishable=true only when score >= 75. Do not invent facts.`;
     publishable: score >= 75
   };
 }
-
-
 
 function cleanGeneratedPost(text) {
   return String(text || "")
