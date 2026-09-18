@@ -126,14 +126,7 @@ async function initializeDatabase() {
 
   await pool.query(
     `INSERT INTO affiliate (
-      product,
-      company,
-      url,
-      affiliate_url,
-      commission,
-      keywords,
-      disclosure,
-      active
+      product, company, url, affiliate_url, commission, keywords, disclosure, active
     )
     SELECT
       'Twin',
@@ -145,9 +138,7 @@ async function initializeDatabase() {
       'Affiliate link',
       1
     WHERE NOT EXISTS (
-      SELECT 1
-      FROM affiliate
-      WHERE LOWER(company) = 'twin'
+      SELECT 1 FROM affiliate WHERE LOWER(company) = 'twin'
     )`
   );
 
@@ -2126,3 +2117,239 @@ app.get("/api/dashboard", async (req, res) => {
         COUNT(*) FILTER (WHERE ai_score >= 75)::int AS approved
       FROM content
     `);
+
+    const categories = await pool.query(`
+      SELECT category, COUNT(*)::int AS count
+      FROM content
+      GROUP BY category
+      ORDER BY count DESC
+    `);
+
+    const sources = await pool.query(`
+      SELECT
+        s.name,
+        s.category,
+        s.active,
+        s.last_checked,
+        COUNT(c.id)::int AS content_count
+      FROM sources s
+      LEFT JOIN content c ON c.source = s.name
+      GROUP BY s.id, s.name, s.category, s.active, s.last_checked
+      ORDER BY s.active DESC, content_count DESC
+    `);
+
+    const affiliateStats = await pool.query(`
+      SELECT
+        COUNT(*)::int AS affiliate_count,
+        COUNT(*) FILTER (WHERE active = 1)::int AS active_affiliates,
+        COALESCE((
+          SELECT COUNT(*)::int
+          FROM affiliate_clicks
+        ), 0) AS affiliate_clicks
+      FROM affiliate
+    `);
+
+    const recent = await pool.query(`
+      SELECT id, title, category, ai_score, status, source, created_at, published_at
+      FROM content
+      ORDER BY id DESC
+      LIMIT 20
+    `);
+
+    res.json({
+      dashboard: true,
+      totals: totals.rows[0],
+      categories: categories.rows,
+      sources: sources.rows,
+      affiliates: affiliateStats.rows[0],
+      recent: recent.rows
+    });
+  } catch (error) {
+    res.status(500).json({
+      dashboard: false,
+      error: error.message
+    });
+  }
+});
+
+app.get(
+  "/api/analytics/:contentId",
+  async (req, res) => {
+    try {
+      const result = await pool.query(
+        `
+          SELECT *
+          FROM analytics
+          WHERE content_id = $1
+          ORDER BY recorded_at DESC
+        `,
+        [req.params.contentId]
+      );
+
+      res.json({
+        count: result.rows.length,
+        analytics: result.rows
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error.message
+      });
+    }
+  }
+);
+
+async function runAutomationCycle() {
+  console.log("Starting automation cycle...");
+
+  try {
+    const collectResponse = await fetch(
+      `http://127.0.0.1:${PORT}/api/collect`
+    );
+    const collectResult = await collectResponse.json();
+    console.log("Collector:", collectResult.total_saved ?? collectResult.error);
+
+    const scoreResult = await pool.query(
+      `SELECT *
+       FROM content
+       WHERE status = 'draft'
+         AND (ai_score IS NULL OR ai_score = 0)
+       ORDER BY id DESC
+       LIMIT 10`
+    );
+
+    let scored = 0;
+    for (const content of scoreResult.rows) {
+      try {
+        const evaluation = await scoreContentWithAI(content);
+
+        await pool.query(
+          `UPDATE content
+           SET ai_score = $1,
+               category = $2
+           WHERE id = $3`,
+          [evaluation.score, evaluation.category, content.id]
+        );
+
+        scored++;
+        console.log(`Scored #${content.id}: ${evaluation.score}`);
+      } catch (error) {
+        console.error(`Scoring #${content.id} failed:`, error.message);
+      }
+    }
+
+    const generateResult = await pool.query(
+      `SELECT *
+       FROM content
+       WHERE status = 'draft'
+         AND ai_score >= 75
+         AND (body IS NULL OR body = '' OR body LIKE 'Collected from %')
+       ORDER BY ai_score DESC, id DESC
+       LIMIT 5`
+    );
+
+    let generated = 0;
+    for (const content of generateResult.rows) {
+      try {
+        let post = await generateContentWithAI(content);
+        post = await addAffiliateTrackingToPost(post, content);
+
+        await pool.query(
+          "UPDATE content SET body = $1 WHERE id = $2",
+          [post, content.id]
+        );
+
+        generated++;
+        console.log(`Generated #${content.id}`);
+      } catch (error) {
+        console.error(`Generation #${content.id} failed:`, error.message);
+      }
+    }
+
+    const publishResult = await pool.query(
+      `SELECT *
+       FROM content
+       WHERE status = 'draft'
+         AND ai_score >= 75
+         AND body IS NOT NULL
+         AND body <> ''
+         AND body NOT LIKE 'Collected from %'
+       ORDER BY ai_score DESC, id DESC
+       LIMIT 3`
+    );
+
+    let published = 0;
+    for (const content of publishResult.rows) {
+      try {
+        const telegramResult = await telegram("sendMessage", {
+          chat_id: CHANNEL_USERNAME,
+          text: content.body,
+          disable_web_page_preview: false
+        });
+
+        await pool.query(
+          `UPDATE content
+           SET status = 'published',
+               telegram_message_id = $1,
+               published_at = CURRENT_TIMESTAMP
+           WHERE id = $2
+             AND status = 'draft'`,
+          [telegramResult.result.message_id, content.id]
+        );
+
+        published++;
+        console.log(
+          `Published #${content.id} as Telegram message ${telegramResult.result.message_id}`
+        );
+      } catch (error) {
+        console.error(`Publishing #${content.id} failed:`, error.message);
+      }
+    }
+
+    console.log(
+      `Automation complete: scored=${scored}, generated=${generated}, published=${published}`
+    );
+
+    return {
+      collected: collectResult,
+      scored,
+      generated,
+      published
+    };
+  } catch (error) {
+    console.error("Automation cycle failed:", error);
+    return {
+      scored: 0,
+      generated: 0,
+      published: 0,
+      error: error.message
+    };
+  }
+}
+
+async function startServer() {
+  try {
+    await initializeDatabase();
+
+    app.listen(PORT, () => {
+      console.log(
+        `AI Opportunity Hub running on port ${PORT}`
+      );
+
+      setTimeout(() => {
+        runAutomationCycle();
+      }, 15000);
+
+      setInterval(() => {
+        runAutomationCycle();
+      }, 30 * 60 * 1000);
+    });
+  } catch (error) {
+    console.error(
+      "Failed to start server:",
+      error
+    );
+    process.exit(1);
+  }
+}
+
+startServer();
