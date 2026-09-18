@@ -120,13 +120,27 @@ export function registerHubV2(app,{pool,telegram}){
     return lines.join("\\n");
   }
 
+  async function askFreeAI(question, payload){
+    const key=process.env.OPENROUTER_API_KEY;
+    if(!key)return null;
+    const context=JSON.stringify(payload).slice(0,12000);
+    const prompt="Answer the member using only the supplied AI Opportunity Hub data. Request: "+question+"\\nData: "+context+"\\nRules: do not invent pricing, salary, features, eligibility or URLs. Give up to 5 useful matches and explain briefly why each matches. Include URLs from the data only. Keep under 600 words.";
+    try{
+      const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://ai-opportunity-hub.onrender.com","X-Title":"AI Opportunity Hub"},body:JSON.stringify({model:"openrouter/free",messages:[{role:"system",content:"You are the factual AI Opportunity Hub assistant. Use only supplied data."},{role:"user",content:prompt}],temperature:0.1,max_tokens:600})});
+      if(!r.ok)return null;
+      const d=await r.json();
+      return d.choices?.[0]?.message?.content?.trim()||null;
+    }catch{return null;}
+  }
+
   async function answer(q){
     const l=q.toLowerCase();
     let type=/job|hiring|career|vacanc|employment/.test(l)?"jobs":/make money|earn|income|freelance|side hustle|opportunit/.test(l)?"opportunities":/learn|tutorial|how do i|teach|guide/.test(l)?"tutorials":/free resource|free stuff/.test(l)?"resources":"tools";
     const p=await get(type,q);
     if(type==="tools"&&/android/.test(l))p.items=p.items.filter(x=>/android/i.test(x.platform||"")||/android/i.test(x.description||""));
     if(type==="tools"&&/free|no cost|gratis/.test(l))p.items=p.items.filter(x=>/free/i.test((x.pricing||"")+" "+(x.free_tier||"")));
-    return format(p.title,p.items);
+    const ai=await askFreeAI(q,{category:p.title,items:p.items});
+    return ai||format(p.title,p.items);
   }
 
   const menu={
