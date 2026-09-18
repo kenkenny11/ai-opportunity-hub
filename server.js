@@ -1086,6 +1086,13 @@ async function generateAffiliatePostWithAI(affiliate) {
   const sourceUrl = affiliate.url || affiliate.affiliate_url || "";
   const keywords = affiliate.keywords || "";
 
+  const sameProductAndCompany =
+    product.trim().toLowerCase() === company.trim().toLowerCase();
+
+  const identityRule = sameProductAndCompany
+    ? "- Product and company have the same name. Mention the name naturally without phrasing like 'by' or 'from' the company."
+    : "- Distinguish the product and company naturally; do not repeat the company name unnecessarily.";
+
   const prompt = `Create a factual Telegram partner recommendation for AI Opportunity Hub.
 
 Product: ${product}
@@ -1100,6 +1107,8 @@ Rules:
 - Do not promise income, jobs, business results, or financial outcomes.
 - Make it useful rather than sounding like an advertisement.
 - Use 70-120 words.
+- Avoid repetitive product/company wording.
+${identityRule}
 - Include a short "Why check it out?" section only when supported by the supplied information.
 - End with a short question inviting discussion.
 - Do NOT include any affiliate link or disclosure; the server will add those.
