@@ -1103,23 +1103,25 @@ async function generateContentWithAI(content) {
     throw new Error("OPENROUTER_API_KEY is not configured");
   }
 
-  const prompt = `Create a Telegram post for AI Opportunity Hub from this verified source item.
+  const prompt = `Create a factual Telegram post for AI Opportunity Hub using only the verified information provided below.
 
 Title: ${content.title}
 Source: ${content.source}
 URL: ${content.source_url || ""}
 Category: ${content.category}
 
-Rules:
-- Use only information supported by the title, source and URL.
-- Do not invent features, numbers, dates, prices, claims or quotes.
-- Make it useful to a general audience interested in AI tools, jobs, digital opportunities, apps, tutorials, news and free resources.
-- Keep it concise: about 100-180 words.
-- Start with a strong, clear headline.
-- Explain what happened and why it matters.
-- Include a practical takeaway when supported by the source.
-- End with a short engagement question.
-- Include the source link on its own line.
+Strict rules:
+- Treat the title as the main verified claim.
+- Do not invent or infer features, capabilities, performance, availability, pricing, legal rights, dates, user benefits, statistics, quotes or industry impact.
+- Do not say a license removes "legal hurdles" or guarantees business use unless that exact claim is supported by the provided information.
+- Avoid promotional phrases such as "game-changing", "major boost", "revolutionary", "cutting-edge" or similar language unless they are part of the verified title.
+- Clearly separate verified facts from general context.
+- If the source details are limited, keep the post shorter rather than filling gaps with assumptions.
+- Keep it about 80-150 words.
+- Start with a clear headline.
+- Explain what was announced and why it may be relevant, using cautious wording only when reasonable from the verified facts.
+- End with one short engagement question.
+- Put the exact source URL on its own line.
 - Do not use markdown tables.
 - Return ONLY the finished Telegram post, with no explanation before or after it.`;
 
