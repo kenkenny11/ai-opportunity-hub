@@ -841,6 +841,74 @@ app.post(
   }
 );
 
+
+app.get("/api/ai/publish/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM content WHERE id = $1 LIMIT 1",
+      [req.params.id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "Content not found" });
+    }
+
+    const content = result.rows[0];
+
+    if (content.status === "published") {
+      return res.status(409).json({
+        published: false,
+        error: "Content has already been published",
+        telegram_message_id: content.telegram_message_id
+      });
+    }
+
+    if (Number(content.ai_score) < 75) {
+      return res.status(400).json({
+        published: false,
+        error: "Content is below the publishable AI score threshold of 75",
+        score: Number(content.ai_score)
+      });
+    }
+
+    if (!content.body || content.body.startsWith("Collected from ")) {
+      return res.status(400).json({
+        published: false,
+        error: "AI-generated content is required before publishing"
+      });
+    }
+
+    const telegramResult = await telegram("sendMessage", {
+      chat_id: CHANNEL_USERNAME,
+      text: content.body,
+      disable_web_page_preview: false
+    });
+
+    const updated = await pool.query(
+      `UPDATE content
+       SET status = 'published',
+           telegram_message_id = $1,
+           published_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+      [telegramResult.result.message_id, content.id]
+    );
+
+    res.json({
+      published: true,
+      channel: CHANNEL_USERNAME,
+      telegram_message_id: telegramResult.result.message_id,
+      content: updated.rows[0]
+    });
+  } catch (error) {
+    console.error("Auto-publish error:", error);
+    res.status(500).json({
+      published: false,
+      error: error.message
+    });
+  }
+});
+
 app.get(
   "/publish-test/:id",
   async (req, res) => {
