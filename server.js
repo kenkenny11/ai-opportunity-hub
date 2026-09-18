@@ -1127,6 +1127,139 @@ app.get("/api/ai/score-drafts", async (req, res) => {
   }
 });
 
+async function scoreContentWithAI(content) {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not configured");
+  }
+
+  const prompt = `You are the quality editor for AI Opportunity Hub.
+
+Evaluate this candidate:
+Title: ${content.title}
+Source: ${content.source}
+URL: ${content.source_url || ""}
+
+Return ONLY valid JSON:
+{"score":0,"category":"AI News","reason":"short factual reason","publishable":false}
+
+Score: usefulness 25, relevance 20, freshness 20, engagement potential 15, monetization potential 10, source quality 10.
+Set publishable=true only when score >= 75. Do not invent facts.`;
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://ai-opportunity-hub.onrender.com",
+      "X-Title": "AI Opportunity Hub"
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-4.1-mini",
+      messages: [
+        { role: "system", content: "Return JSON only. No markdown." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.1,
+      max_tokens: 300
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenRouter HTTP ${response.status}: ${errorText.slice(0, 300)}`);
+  }
+
+  const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content?.trim();
+  if (!raw) throw new Error("OpenRouter returned no content");
+
+  const cleaned = raw.replace(/^\`\`\`json\s*/i, "").replace(/\s*\`\`\`$/i, "");
+  const parsed = JSON.parse(cleaned);
+
+  return {
+    score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
+    category: parsed.category || "AI News",
+    reason: parsed.reason || "AI quality evaluation completed.",
+    publishable: Boolean(parsed.publishable)
+  };
+}
+
+app.post("/api/ai/score/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM content WHERE id = $1 LIMIT 1",
+      [req.params.id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Content not found" });
+    }
+
+    const result = await scoreContentWithAI(rows[0]);
+
+    await pool.query(
+      "UPDATE content SET ai_score = $1, category = $2 WHERE id = $3",
+      [result.score, result.category, req.params.id]
+    );
+
+    res.json({
+      scored: true,
+      id: rows[0].id,
+      title: rows[0].title,
+      score: result.score,
+      category: result.category,
+      publishable: result.publishable,
+      reason: result.reason
+    });
+  } catch (error) {
+    console.error("AI scoring error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/ai/score-drafts", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 10, 25);
+    const { rows } = await pool.query(
+      "SELECT * FROM content WHERE status = 'draft' ORDER BY id DESC LIMIT $1",
+      [limit]
+    );
+
+    const results = [];
+
+    for (const item of rows) {
+      try {
+        const result = await scoreContentWithAI(item);
+
+        await pool.query(
+          "UPDATE content SET ai_score = $1, category = $2 WHERE id = $3",
+          [result.score, result.category, item.id]
+        );
+
+        results.push({
+          id: item.id,
+          title: item.title,
+          score: result.score,
+          category: result.category,
+          publishable: result.publishable,
+          reason: result.reason
+        });
+      } catch (error) {
+        results.push({
+          id: item.id,
+          title: item.title,
+          error: error.message
+        });
+      }
+    }
+
+    res.json({ scored: true, count: results.length, results });
+  } catch (error) {
+    console.error("Draft scoring error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/api/collect", async (req, res) => {
   try {
     const sourceResult = await pool.query(`
