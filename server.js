@@ -77,6 +77,37 @@ async function initializeDatabase() {
     )
   `);
 
+  const additionalSources = [
+    {
+      name: "Product Hunt",
+      url: "https://www.producthunt.com/",
+      category: "Digital Opportunities",
+      reliability: 85
+    },
+    {
+      name: "Wellfound AI & Startup Jobs",
+      url: "https://wellfound.com/remote",
+      category: "AI Jobs",
+      reliability: 90
+    }
+  ];
+
+  for (const source of additionalSources) {
+    await pool.query(
+      `INSERT INTO sources (name, url, category, active, reliability)
+       SELECT $1, $2, $3, 1, $4
+       WHERE NOT EXISTS (
+         SELECT 1 FROM sources WHERE LOWER(name) = LOWER($1)
+       )`,
+      [
+        source.name,
+        source.url,
+        source.category,
+        source.reliability
+      ]
+    );
+  }
+
   console.log("Database initialized");
 }
 
