@@ -1,6 +1,7 @@
 import express from "express";
 import pg from "pg";
 import * as cheerio from "cheerio";
+import { registerHubV2 } from "./hub-v2.js";
 
 const { Pool } = pg;
 
@@ -8,6 +9,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+
+// AI Opportunity Hub v2 service layer: universal search, user routing and Mini App.
+registerHubV2(app, { pool, telegram });
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TEST_CHAT_ID = process.env.TELEGRAM_TEST_CHAT_ID;
