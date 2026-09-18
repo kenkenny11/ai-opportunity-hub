@@ -89,6 +89,54 @@ async function initializeDatabase() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS premium_products (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      price_stars INTEGER NOT NULL DEFAULT 50,
+      content TEXT NOT NULL,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    INSERT INTO premium_products (title, description, price_stars, content, active)
+    SELECT
+      'AI Opportunity Starter Pack',
+      'A practical starter pack for finding, evaluating and using AI tools and opportunities.',
+      50,
+      'AI OPPORTUNITY STARTER PACK
+
+1. TOOL CHECKLIST
+- Verify the official website before signing up.
+- Check pricing, free-tier limits and privacy terms.
+- Test one small workflow before committing time or money.
+
+2. OPPORTUNITY CHECKLIST
+- Confirm the source and closing date.
+- Check location and eligibility requirements.
+- Never pay a fee just to apply for a job.
+
+3. AI WORKFLOW
+- Research -> verify -> score -> publish -> measure.
+- Keep source URLs with every published item.
+- Review engagement before repeating a topic.
+
+4. CONTENT FORMULA
+Hook -> verified fact -> practical use -> source -> question.
+
+This starter pack is delivered digitally through AI Opportunity Hub after payment.',
+      50,
+      1
+    WHERE NOT EXISTS (
+      SELECT 1 FROM premium_products WHERE title = 'AI Opportunity Starter Pack'
+    )
+  `);
+
+
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS analytics (
       id SERIAL PRIMARY KEY,
       content_id INTEGER,
@@ -2885,6 +2933,125 @@ app.get(
   }
 );
 
+
+// ==================== PREMIUM / TELEGRAM STARS ====================
+async function sendPremiumInvoice(chatId, product) {
+  return telegram("sendInvoice", {
+    chat_id: chatId,
+    title: product.title.slice(0, 32),
+    description: product.description.slice(0, 255),
+    payload: `premium:${product.id}`,
+    provider_token: "",
+    currency: "XTR",
+    prices: [{ label: product.title.slice(0, 32), amount: Number(product.price_stars) }]
+  });
+}
+
+async function handleTelegramUpdate(update) {
+  try {
+    if (update.pre_checkout_query) {
+      await telegram("answerPreCheckoutQuery", {
+        pre_checkout_query_id: update.pre_checkout_query.id,
+        ok: true
+      });
+      return;
+    }
+    const message = update.message;
+    if (message?.successful_payment) {
+      const payload = String(message.successful_payment.invoice_payload || "");
+      if (!payload.startsWith("premium:")) return;
+      const productId = Number(payload.split(":")[1]);
+      const { rows } = await pool.query(
+        "SELECT * FROM premium_products WHERE id = $1 AND active = 1 LIMIT 1",
+        [productId]
+      );
+      if (!rows.length) return;
+      await telegram("sendMessage", {
+        chat_id: message.chat.id,
+        text: `Payment received for *${rows[0].title}*.\n\n${rows[0].content}`,
+        parse_mode: "Markdown"
+      });
+      return;
+    }
+    const textMessage = message?.text || "";
+    if (!message?.chat?.id) return;
+    if (textMessage === "/premium") {
+      const { rows } = await pool.query(
+        "SELECT id, title, description, price_stars FROM premium_products WHERE active = 1 ORDER BY id ASC"
+      );
+      const lines = ["⭐ *AI Opportunity Hub Premium*"];
+      const keyboard = [];
+      for (const product of rows) {
+        lines.push(`#${product.id} *${product.title}* — ${product.price_stars} Stars\n${product.description}`);
+        keyboard.push([{ text: `⭐ Buy #${product.id} — ${product.price_stars} Stars`, callback_data: `buy:${product.id}` }]);
+      }
+      await telegram("sendMessage", {
+        chat_id: message.chat.id,
+        text: lines.join("\n\n"),
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: keyboard }
+      });
+    } else if (textMessage === "/start" || textMessage === "/help") {
+      await telegram("sendMessage", {
+        chat_id: message.chat.id,
+        text: "🤖 AI Opportunity Hub\n\nUse /tools, /jobs, /free, /learn and /premium."
+      });
+    }
+  } catch (error) {
+    console.error("Telegram update error:", error.message);
+  }
+}
+
+app.post("/telegram/webhook", async (req, res) => {
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (secret && req.get("x-telegram-bot-api-secret-token") !== secret) return res.status(401).json({ error: "Unauthorized" });
+  res.sendStatus(200);
+  await handleTelegramUpdate(req.body);
+});
+
+app.post("/telegram/webhook", async (req, res) => {
+  res.sendStatus(200);
+  await handleTelegramUpdate(req.body);
+});
+
+app.get("/api/premium", async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT id, title, description, price_stars, active, created_at FROM premium_products ORDER BY id ASC");
+    res.json({ premium: true, products: rows });
+  } catch (error) {
+    res.status(500).json({ premium: false, error: error.message });
+  }
+});
+
+app.get("/api/analytics/summary", async (req, res) => {
+  try {
+    const totals = await pool.query(`
+      SELECT COUNT(*)::int AS total_content,
+             COUNT(*) FILTER (WHERE status = 'published')::int AS published,
+             COUNT(*) FILTER (WHERE status = 'draft')::int AS drafts,
+             COUNT(*) FILTER (WHERE status = 'rejected')::int AS rejected,
+             COALESCE(SUM(views),0)::int AS views,
+             COALESCE(SUM(clicks),0)::int AS clicks,
+             COALESCE(AVG(performance_score),0)::numeric(10,2) AS avg_performance
+      FROM analytics
+    `);
+    const categories = await pool.query(`SELECT category, COUNT(*)::int AS published FROM content WHERE status='published' GROUP BY category ORDER BY published DESC`);
+    res.json({ analytics: true, totals: totals.rows[0], categories: categories.rows });
+  } catch (error) {
+    res.status(500).json({ analytics: false, error: error.message });
+  }
+});
+
+app.get("/api/system/status", async (req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    const content = await pool.query("SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='published')::int AS published, COUNT(*) FILTER (WHERE status='draft')::int AS drafts FROM content");
+    const affiliates = await pool.query("SELECT COUNT(*)::int AS count FROM affiliate WHERE active=1");
+    const premium = await pool.query("SELECT COUNT(*)::int AS count FROM premium_products WHERE active=1");
+    res.json({status:"ok",service:"AI Opportunity Hub",database:"connected",telegram:BOT_TOKEN?"configured":"missing",automation:"30-minute cycle",auto_publish_threshold:75,max_posts_per_cycle:3,content:content.rows[0],active_affiliates:Number(affiliates.rows[0].count),premium_products:Number(premium.rows[0].count)});
+  } catch (error) { res.status(500).json({status:"error",error:error.message}); }
+});
+
 async function runAutomationCycle() {
   console.log("Starting automation cycle...");
 
@@ -2993,6 +3160,11 @@ async function runAutomationCycle() {
              AND status = 'draft'`,
           [telegramResult.result.message_id, content.id]
         );
+        await pool.query(
+          `INSERT INTO analytics (content_id, views, reactions, comments, clicks, ctr, performance_score)
+           VALUES ($1, 0, 0, 0, 0, 0, 0)`,
+          [content.id]
+        );
 
         published++;
         console.log(
@@ -3033,6 +3205,14 @@ async function startServer() {
       console.log(
         `AI Opportunity Hub running on port ${PORT}`
       );
+      if (process.env.PUBLIC_BASE_URL && BOT_TOKEN) {
+        const webhookUrl = `${process.env.PUBLIC_BASE_URL.replace(/\\/$/, "")}/telegram/webhook`;
+        telegram("setWebhook", {
+          url: webhookUrl,
+          ...(process.env.TELEGRAM_WEBHOOK_SECRET ? { secret_token: process.env.TELEGRAM_WEBHOOK_SECRET } : {})
+        }).then(() => console.log("Telegram webhook configured:", webhookUrl))
+          .catch((error) => console.error("Telegram webhook setup failed:", error.message));
+      }
 
       setTimeout(() => {
         runAutomationCycle();
