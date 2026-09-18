@@ -1195,27 +1195,77 @@ async function generateContentWithAI(content) {
     throw new Error("OPENROUTER_API_KEY is not configured");
   }
 
-  const prompt = `Create a factual Telegram post for AI Opportunity Hub using only the verified information provided below.
+  const category = content.category || "AI News";
+
+  let formatRules = "";
+
+  if (category === "AI Jobs") {
+    formatRules = `
+JOB FORMAT:
+- Clearly state the job/role if verified by the title.
+- Mention company, location/remote status, and application details only when present in the verified information.
+- Do not invent salary, requirements, visa support, or benefits.
+- End with: "🔗 Apply: [source URL]"
+`;
+  } else if (category === "Digital Opportunities") {
+    formatRules = `
+OPPORTUNITY FORMAT:
+- Clearly explain what the opportunity/product is from the verified information.
+- Mention launch, access, pricing, or availability only when supported.
+- Do not promise income, success, or business results.
+- End with: "🔗 Source: [source URL]"
+`;
+  } else if (category === "AI Tools" || category === "Android & AI Apps") {
+    formatRules = `
+TOOL FORMAT:
+- Explain what the tool/app is based only on the verified title and source.
+- Mention platform, pricing, features, or access only when verified.
+- Do not claim a tool is "best", "free", "unlimited", or "powerful" unless verified.
+- End with: "🔗 Try it / Source: [source URL]"
+`;
+  } else if (category === "AI Tutorials" || category === "Tutorials") {
+    formatRules = `
+TUTORIAL FORMAT:
+- Explain the topic and the practical idea covered by the source.
+- Do not invent steps that are not supported by the source information.
+- End with: "🔗 Read the tutorial: [source URL]"
+`;
+  } else if (category === "Free Resources") {
+    formatRules = `
+FREE RESOURCE FORMAT:
+- Explain the resource and what is verified about its access.
+- Do not claim something is free if the source information does not support it.
+- End with: "🔗 Resource: [source URL]"
+`;
+  } else {
+    formatRules = `
+NEWS FORMAT:
+- State what was announced using only verified information.
+- Keep context factual and cautious.
+- End with: "🔗 Source: [source URL]"
+`;
+  }
+
+  const prompt = `Create a factual Telegram post for AI Opportunity Hub.
 
 Title: ${content.title}
 Source: ${content.source}
 URL: ${content.source_url || ""}
-Category: ${content.category}
+Category: ${category}
 
 Strict rules:
 - Treat the title as the main verified claim.
-- Do not invent or infer features, capabilities, performance, availability, pricing, legal rights, dates, user benefits, statistics, quotes or industry impact.
-- Do not say a license removes "legal hurdles" or guarantees business use unless that exact claim is supported by the provided information.
-- Avoid promotional phrases such as "game-changing", "major boost", "revolutionary", "cutting-edge" or similar language unless they are part of the verified title.
-- Clearly separate verified facts from general context.
-- If the source details are limited, keep the post shorter rather than filling gaps with assumptions.
+- Do not invent or infer features, capabilities, performance, availability, pricing, legal rights, dates, user benefits, statistics, quotes, salary, requirements, or industry impact.
+- Do not promise income, jobs, business results, or financial outcomes.
+- Avoid promotional phrases such as "game-changing", "major boost", "revolutionary", "best", "guaranteed", "easy money", or "get rich".
+- If source details are limited, keep the post short rather than filling gaps with assumptions.
 - Keep it about 80-150 words.
 - Start with a clear headline.
-- Explain what was announced and why it may be relevant, using cautious wording only when reasonable from the verified facts.
 - End with one short engagement question.
-- Put the exact source URL on its own line.
-- Do not use markdown tables.
-- Return ONLY the finished Telegram post, with no explanation before or after it.`;
+- Use the exact source URL supplied above.
+- Return ONLY the finished Telegram post.
+
+${formatRules}`;
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
