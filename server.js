@@ -3122,11 +3122,31 @@ app.get("/telegram/diagnostics", async (req, res) => {
   }
 });
 
-app.post("/telegram/webhook", async (req, res) => {
+async function telegramWebhookHandler(req, res) {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (secret && req.get("x-telegram-bot-api-secret-token") !== secret) return res.status(401).json({ error: "Unauthorized" });
+  if (secret && req.get("x-telegram-bot-api-secret-token") !== secret) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  // Acknowledge Telegram immediately, then process the update.
   res.sendStatus(200);
-  await handleTelegramUpdate(req.body);
+  try {
+    await handleTelegramUpdate(req.body);
+  } catch (error) {
+    console.error("Telegram webhook processing error:", error.message);
+  }
+}
+
+// Accept both URL forms so a trailing-slash normalization by a proxy cannot produce 404.
+app.post("/telegram/webhook", telegramWebhookHandler);
+app.post("/telegram/webhook/", telegramWebhookHandler);
+
+// Health response for browser/proxy checks; Telegram still uses POST.
+app.get("/telegram/webhook", (req, res) => {
+  res.json({ ok: true, endpoint: "telegram-webhook" });
+});
+app.get("/telegram/webhook/", (req, res) => {
+  res.json({ ok: true, endpoint: "telegram-webhook" });
 });
 
 app.get("/api/premium", async (req, res) => {
