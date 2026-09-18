@@ -1383,7 +1383,6 @@ app.get("/api/affiliate/dashboard", async (req, res) => {
        FROM content c
        LEFT JOIN analytics ac
          ON ac.content_id = c.id
-        AND ac.event_type = 'affiliate_click'
        WHERE c.category = 'Digital Opportunities'
        GROUP BY c.id
        ORDER BY c.id DESC
