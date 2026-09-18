@@ -1110,18 +1110,14 @@ Rules:
 - Make it informative rather than sounding like an advertisement.
 - Use 70-120 words when the supplied information supports that length; otherwise use fewer words.
 - Avoid repetitive product/company wording.
-\${identityRule}
+${identityRule}
 - A "Why check it out?" section is optional. Include it only if it can be written entirely from supplied facts; otherwise omit it.
 - End with a short question inviting discussion that does not assume the reader has used the product.
 - Do NOT include any affiliate link or disclosure; the server will add those.
 - Return ONLY the finished Telegram post.
-
-
-  - Return ONLY the finished Telegram post.
 `;
 
-  const response =
-    method: "POST",
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {    method: "POST",
     headers: {
       "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
       "Content-Type": "application/json",
