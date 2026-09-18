@@ -9,6 +9,7 @@ app.use(express.json());
 // ─────────────────────────────────────────────
 // Environment variables
 // ─────────────────────────────────────────────
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TEST_CHAT_ID = process.env.TELEGRAM_TEST_CHAT_ID;
 const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
@@ -16,6 +17,7 @@ const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
 // ─────────────────────────────────────────────
 // SQLite database
 // ─────────────────────────────────────────────
+
 const db = new Database("ai_opportunity_hub.db");
 
 db.pragma("journal_mode = WAL");
@@ -189,7 +191,9 @@ app.get("/publish-test", async (req, res) => {
 
     const result = await telegram("sendMessage", {
       chat_id: CHANNEL_USERNAME,
-      text: "🚀 AI Opportunity Hub\n\nSQLite database is connected successfully."
+      text:
+        "🚀 AI Opportunity Hub\n\n" +
+        "SQLite database is connected successfully."
     });
 
     res.json({
@@ -233,7 +237,7 @@ app.get("/database-test", (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Create content
+// Create content using JSON
 // ─────────────────────────────────────────────
 
 app.post("/content-test", (req, res) => {
@@ -270,6 +274,45 @@ app.post("/content-test", (req, res) => {
         category || "AI Tools",
         source || "Manual",
         source_url || "",
+        "draft"
+      );
+
+    res.json({
+      saved: true,
+      content_id: result.lastInsertRowid
+    });
+  } catch (error) {
+    res.status(500).json({
+      saved: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Browser-friendly database test
+// ─────────────────────────────────────────────
+
+app.get("/content-test", (req, res) => {
+  try {
+    const result = db
+      .prepare(`
+        INSERT INTO content (
+          title,
+          body,
+          category,
+          source,
+          source_url,
+          status
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        "5 Free AI Tools You Should Try",
+        "Here are five useful AI tools that can help with writing, research, productivity, and content creation.",
+        "AI Tools",
+        "AI Opportunity Hub",
+        "",
         "draft"
       );
 
