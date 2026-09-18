@@ -1349,6 +1349,61 @@ app.get("/go/affiliate/:id", async (req, res) => {
   }
 });
 
+app.get("/api/affiliate/dashboard", async (req, res) => {
+  try {
+    const summary = await pool.query(
+      `SELECT
+         COUNT(*)::int AS total_affiliates,
+         COUNT(*) FILTER (WHERE active = 1)::int AS active_affiliates,
+         COALESCE((SELECT COUNT(*) FROM affiliate_clicks), 0)::int AS total_clicks
+       FROM affiliate`
+    );
+
+    const affiliates = await pool.query(
+      `SELECT
+         a.id,
+         a.product,
+         a.company,
+         a.commission,
+         a.active,
+         COUNT(ac.id)::int AS clicks
+       FROM affiliate a
+       LEFT JOIN affiliate_clicks ac ON ac.affiliate_id = a.id
+       GROUP BY a.id
+       ORDER BY clicks DESC, a.id ASC`
+    );
+
+    const posts = await pool.query(
+      `SELECT
+         c.id,
+         c.title,
+         c.status,
+         c.published_at,
+         COUNT(ac.id)::int AS affiliate_clicks
+       FROM content c
+       LEFT JOIN analytics ac
+         ON ac.content_id = c.id
+        AND ac.event_type = 'affiliate_click'
+       WHERE c.category = 'Digital Opportunities'
+       GROUP BY c.id
+       ORDER BY c.id DESC
+       LIMIT 20`
+    );
+
+    res.json({
+      dashboard: true,
+      summary: summary.rows[0],
+      affiliates: affiliates.rows,
+      partner_posts: posts.rows
+    });
+  } catch (error) {
+    res.status(500).json({
+      dashboard: false,
+      error: error.message
+    });
+  }
+});
+
 app.get("/api/affiliate/:id/stats", async (req, res) => {
   try {
     const result = await pool.query(
