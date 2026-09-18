@@ -1043,15 +1043,49 @@ Set publishable=true only when score >= 75. Do not invent facts.`;
 
   if (!raw) throw new Error("OpenRouter returned no content");
 
-  const parsed = JSON.parse(
-    raw.replace(/^\`\`\`json\s*/i, "").replace(/\s*\`\`\`$/i, "")
-  );
+  const cleaned = raw
+    .replace(/^\`\`\`json\s*/i, "")
+    .replace(/\s*\`\`\`$/i, "")
+    .trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    const repaired = cleaned
+      .replace(/"score"\s*:\s*seventy\b/gi, '"score": 70')
+      .replace(/"score"\s*:\s*eighty\b/gi, '"score": 80')
+      .replace(/"score"\s*:\s*sixty\b/gi, '"score": 60')
+      .replace(/"score"\s*:\s*fifty\b/gi, '"score": 50')
+      .replace(/"score"\s*:\s*ninety\b/gi, '"score": 90')
+      .replace(/"score"\s*:\s*one hundred\b/gi, '"score": 100');
+    parsed = JSON.parse(repaired);
+  }
+
+  const allowedCategories = [
+    "AI Tools",
+    "AI Jobs",
+    "Digital Opportunities",
+    "Android & AI Apps",
+    "AI Tutorials",
+    "AI News",
+    "Free Resources",
+    "Tutorials"
+  ];
+
+  let score = Number(parsed.score);
+  if (!Number.isFinite(score)) score = 0;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  const category = allowedCategories.includes(parsed.category)
+    ? parsed.category
+    : "AI News";
 
   return {
-    score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
-    category: parsed.category || "AI News",
+    score,
+    category,
     reason: parsed.reason || "AI quality evaluation completed.",
-    publishable: Boolean(parsed.publishable)
+    publishable: score >= 75
   };
 }
 
