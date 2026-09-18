@@ -329,6 +329,31 @@ app.get("/content-test", (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+// Get all content
+// ─────────────────────────────────────────────
+
+app.get("/content", (req, res) => {
+  try {
+    const posts = db
+      .prepare(`
+        SELECT *
+        FROM content
+        ORDER BY created_at DESC
+      `)
+      .all();
+
+    res.json({
+      count: posts.length,
+      content: posts
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
 // Start server
 // ─────────────────────────────────────────────
 
