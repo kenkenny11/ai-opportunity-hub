@@ -3631,7 +3631,7 @@ async function startServer() {
     await initializeDatabase();
 
     if (BOT_TOKEN && process.env.PUBLIC_BASE_URL) {
-      const miniAppUrl = `${process.env.PUBLIC_BASE_URL.replace(/\\/$/, "")}/miniapp`;
+      const miniAppUrl = `${process.env.PUBLIC_BASE_URL.replace(/\/+$/, "")}/miniapp`;
       telegram("setChatMenuButton", {
         menu_button: {
           type: "web_app",
