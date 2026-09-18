@@ -64,6 +64,15 @@ async function initializeDatabase() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS affiliate_clicks (
+      id SERIAL PRIMARY KEY,
+      affiliate_id INTEGER NOT NULL,
+      content_id INTEGER,
+      clicked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS analytics (
       id SERIAL PRIMARY KEY,
       content_id INTEGER,
@@ -75,6 +84,12 @@ async function initializeDatabase() {
       performance_score REAL DEFAULT 0,
       recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
+  `);
+
+  await pool.query(`
+    ALTER TABLE affiliate
+    ADD COLUMN IF NOT EXISTS keywords TEXT DEFAULT '',
+    ADD COLUMN IF NOT EXISTS disclosure TEXT DEFAULT 'Affiliate link'
   `);
 
   const additionalSources = [
@@ -1022,6 +1037,113 @@ app.get(
   }
 );
 
+
+app.get("/api/affiliate", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        a.*,
+        COUNT(ac.id)::int AS click_count
+      FROM affiliate a
+      LEFT JOIN affiliate_clicks ac ON ac.affiliate_id = a.id
+      GROUP BY a.id
+      ORDER BY a.active DESC, a.id DESC
+    `);
+
+    res.json({
+      count: result.rows.length,
+      affiliates: result.rows
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+app.get("/go/affiliate/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM affiliate
+       WHERE id = $1 AND active = 1
+       LIMIT 1`,
+      [req.params.id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).send("Affiliate link not found");
+    }
+
+    const affiliate = result.rows[0];
+    const target = String(affiliate.affiliate_url || "");
+
+    let parsed;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return res.status(400).send("Invalid affiliate URL");
+    }
+
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return res.status(400).send("Invalid affiliate URL");
+    }
+
+    const contentId = Number(req.query.content_id) || null;
+
+    await pool.query(
+      `INSERT INTO affiliate_clicks (affiliate_id, content_id)
+       VALUES ($1, $2)`,
+      [affiliate.id, contentId]
+    );
+
+    if (contentId) {
+      await pool.query(
+        `INSERT INTO analytics (content_id, clicks, ctr)
+         VALUES ($1, 1, 0)`,
+        [contentId]
+      );
+    }
+
+    res.redirect(target);
+  } catch (error) {
+    console.error("Affiliate redirect error:", error);
+    res.status(500).send("Unable to process affiliate link");
+  }
+});
+
+app.get("/api/affiliate/:id/stats", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT
+         a.id,
+         a.product,
+         a.company,
+         a.active,
+         COUNT(ac.id)::int AS clicks
+       FROM affiliate a
+       LEFT JOIN affiliate_clicks ac ON ac.affiliate_id = a.id
+       WHERE a.id = $1
+       GROUP BY a.id
+       LIMIT 1`,
+      [req.params.id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        error: "Affiliate not found"
+      });
+    }
+
+    res.json({
+      affiliate: result.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
 app.get("/api/sources", async (req, res) => {
   try {
     const result = await pool.query(`
@@ -1307,6 +1429,55 @@ ${formatRules}`;
   return cleanGeneratedPost(raw);
 }
 
+async function addAffiliateTrackingToPost(post, content) {
+  if (!post || !content) return post;
+
+  const eligibleCategories = [
+    "AI Tools",
+    "Android & AI Apps",
+    "Digital Opportunities"
+  ];
+
+  if (!eligibleCategories.includes(content.category)) {
+    return post;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT *
+     FROM affiliate
+     WHERE active = 1
+       AND affiliate_url IS NOT NULL
+       AND affiliate_url <> ''
+     ORDER BY id ASC`
+  );
+
+  const haystack = `${content.title} ${post}`.toLowerCase();
+
+  for (const affiliate of rows) {
+    const terms = String(
+      affiliate.keywords || `${affiliate.product || ""} ${affiliate.company || ""}`
+    )
+      .split(/[,|]/)
+      .map((term) => term.trim().toLowerCase())
+      .filter((term) => term.length >= 4);
+
+    if (!terms.length) continue;
+
+    const matched = terms.some((term) => haystack.includes(term));
+
+    if (!matched) continue;
+
+    const trackedUrl =
+      `https://ai-opportunity-hub.onrender.com/go/affiliate/${affiliate.id}?content_id=${content.id}`;
+
+    const disclosure = affiliate.disclosure || "Affiliate link";
+
+    return `${post}\n\n🔗 ${affiliate.product || affiliate.company || "Recommended resource"}: ${trackedUrl}\nℹ️ ${disclosure}`;
+  }
+
+  return post;
+}
+
 app.get("/api/ai/generate/:id", async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -1328,7 +1499,8 @@ app.get("/api/ai/generate/:id", async (req, res) => {
       });
     }
 
-    const generatedPost = await generateContentWithAI(content);
+    let generatedPost = await generateContentWithAI(content);
+    generatedPost = await addAffiliateTrackingToPost(generatedPost, content);
 
     await pool.query(
       "UPDATE content SET body = $1 WHERE id = $2",
@@ -1408,7 +1580,8 @@ app.get("/api/ai/generate-drafts", async (req, res) => {
 
     for (const item of rows) {
       try {
-        const generatedPost = await generateContentWithAI(item);
+        let generatedPost = await generateContentWithAI(item);
+        generatedPost = await addAffiliateTrackingToPost(generatedPost, item);
 
         await pool.query(
           "UPDATE content SET body = $1 WHERE id = $2",
@@ -1749,6 +1922,17 @@ app.get("/api/dashboard", async (req, res) => {
       ORDER BY s.active DESC, content_count DESC
     `);
 
+    const affiliateStats = await pool.query(`
+      SELECT
+        COUNT(*)::int AS affiliate_count,
+        COUNT(*) FILTER (WHERE active = 1)::int AS active_affiliates,
+        COALESCE((
+          SELECT COUNT(*)::int
+          FROM affiliate_clicks
+        ), 0) AS affiliate_clicks
+      FROM affiliate
+    `);
+
     const recent = await pool.query(`
       SELECT id, title, category, ai_score, status, source, created_at, published_at
       FROM content
@@ -1761,6 +1945,7 @@ app.get("/api/dashboard", async (req, res) => {
       totals: totals.rows[0],
       categories: categories.rows,
       sources: sources.rows,
+      affiliates: affiliateStats.rows[0],
       recent: recent.rows
     });
   } catch (error) {
@@ -1849,7 +2034,8 @@ async function runAutomationCycle() {
     let generated = 0;
     for (const content of generateResult.rows) {
       try {
-        const post = await generateContentWithAI(content);
+        let post = await generateContentWithAI(content);
+        post = await addAffiliateTrackingToPost(post, content);
 
         await pool.query(
           "UPDATE content SET body = $1 WHERE id = $2",
