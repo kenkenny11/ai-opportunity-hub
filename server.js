@@ -176,6 +176,39 @@ function extractArticles(html, sourceUrl) {
       title = title.split(" • ")[0].trim();
     }
 
+    const metadataMarkers = [
+      " • 1 day ago",
+      " • 2 days ago",
+      " • 3 days ago",
+      " • 4 days ago",
+      " • 5 days ago",
+      " • 6 days ago",
+      " • 7 days ago",
+      " • 8 days ago",
+      " • 9 days ago",
+      " • 10 days ago",
+      " • Jan ",
+      " • Feb ",
+      " • Mar ",
+      " • Apr ",
+      " • May ",
+      " • Jun ",
+      " • Jul ",
+      " • Aug ",
+      " • Sep ",
+      " • Oct ",
+      " • Nov ",
+      " • Dec "
+    ];
+
+    for (const metadataMarker of metadataMarkers) {
+      const markerIndex = title.indexOf(metadataMarker);
+      if (markerIndex > 0) {
+        title = title.slice(0, markerIndex).trim();
+        break;
+      }
+    }
+
     if (title.includes(" | ")) {
       const parts = title.split(" | ");
       if (parts.length > 1 && parts[0].length >= 25) {
@@ -221,6 +254,25 @@ function extractArticles(html, sourceUrl) {
 
     if (sourceHost.includes("blogs.microsoft.com")) {
       if (path.includes("/blog/author/")) {
+        return false;
+      }
+
+      const microsoftBlockedPhrases = [
+        "company transformation",
+        "achieving success with ai",
+        "water intensity",
+        "scientific discovery",
+        "datacenter in",
+        "our commitment",
+        "our latest",
+        "our company"
+      ];
+
+      if (
+        microsoftBlockedPhrases.some((phrase) =>
+          lowerTitle.includes(phrase)
+        )
+      ) {
         return false;
       }
 
