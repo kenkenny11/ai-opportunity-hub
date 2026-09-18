@@ -20,7 +20,10 @@ const db = new Database("ai_opportunity_hub.db");
 
 db.pragma("journal_mode = WAL");
 
-// Content table
+// ─────────────────────────────────────────────
+// Database tables
+// ─────────────────────────────────────────────
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS content (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +40,6 @@ db.exec(`
   )
 `);
 
-// Sources table
 db.exec(`
   CREATE TABLE IF NOT EXISTS sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +52,6 @@ db.exec(`
   )
 `);
 
-// Affiliate table
 db.exec(`
   CREATE TABLE IF NOT EXISTS affiliate (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +65,6 @@ db.exec(`
   )
 `);
 
-// Analytics table
 db.exec(`
   CREATE TABLE IF NOT EXISTS analytics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +82,7 @@ db.exec(`
 // ─────────────────────────────────────────────
 // Telegram helper
 // ─────────────────────────────────────────────
+
 async function telegram(method, body = {}) {
   if (!BOT_TOKEN) {
     throw new Error("TELEGRAM_BOT_TOKEN is not configured");
@@ -102,7 +103,7 @@ async function telegram(method, body = {}) {
 }
 
 // ─────────────────────────────────────────────
-// Basic routes
+// Home
 // ─────────────────────────────────────────────
 
 app.get("/", (req, res) => {
@@ -112,6 +113,10 @@ app.get("/", (req, res) => {
     database: "SQLite"
   });
 });
+
+// ─────────────────────────────────────────────
+// Health
+// ─────────────────────────────────────────────
 
 app.get("/health", (req, res) => {
   res.json({
@@ -222,6 +227,59 @@ app.get("/database-test", (req, res) => {
   } catch (error) {
     res.status(500).json({
       database: "error",
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Create content
+// ─────────────────────────────────────────────
+
+app.post("/content-test", (req, res) => {
+  try {
+    const {
+      title,
+      body,
+      category,
+      source,
+      source_url
+    } = req.body;
+
+    if (!title || !body) {
+      return res.status(400).json({
+        error: "title and body are required"
+      });
+    }
+
+    const result = db
+      .prepare(`
+        INSERT INTO content (
+          title,
+          body,
+          category,
+          source,
+          source_url,
+          status
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        title,
+        body,
+        category || "AI Tools",
+        source || "Manual",
+        source_url || "",
+        "draft"
+      );
+
+    res.json({
+      saved: true,
+      content_id: result.lastInsertRowid
+    });
+  } catch (error) {
+    res.status(500).json({
+      saved: false,
       error: error.message
     });
   }
