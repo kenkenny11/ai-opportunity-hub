@@ -432,6 +432,25 @@ function extractArticles(html, sourceUrl) {
       return;
     }
 
+    const normalizedSource = sourceHost;
+    const lowerText = text.toLowerCase();
+
+    if (normalizedSource.includes("wellfound.com")) {
+      const aiSignals = [
+        "ai", "artificial intelligence", "machine learning", "ml ",
+        "deep learning", "llm", "generative", "genai", "computer vision",
+        "nlp", "natural language", "robotics", "autonomous", "data science",
+        "data scientist", "ml engineer", "machine learning engineer",
+        "ai engineer", "ai platform", "applied ai", "machine intelligence"
+      ];
+
+      const hasAiSignal = aiSignals.some((signal) => lowerText.includes(signal));
+
+      if (!hasAiSignal) {
+        return;
+      }
+    }
+
     let absoluteUrl;
 
     try {
