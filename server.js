@@ -1975,16 +1975,40 @@ async function scoreContentWithAI(content) {
   const lowerTitle = title.toLowerCase();
   const isWellfound = source.toLowerCase().includes("wellfound");
 
-  const aiJobSignals = [
-    "ai", "artificial intelligence", "machine learning", "ml ",
-    "deep learning", "llm", "generative", "genai", "computer vision",
-    "nlp", "natural language", "robotics", "autonomous", "data science",
-    "data scientist", "ml engineer", "machine learning engineer",
-    "ai engineer", "ai platform", "applied ai", "machine intelligence"
+  const aiJobPatterns = [
+    /\bai\b/i,
+    /artificial intelligence/i,
+    /machine learning/i,
+    /\bml\b/i,
+    /deep learning/i,
+    /\bllm\b/i,
+    /generative ai/i,
+    /\bgenai\b/i,
+    /computer vision/i,
+    /\bnlp\b/i,
+    /natural language/i,
+    /robotics/i,
+    /autonomous/i,
+    /data science/i,
+    /data scientist/i,
+    /mlops/i,
+    /machine intelligence/i,
+    /applied ai/i,
+    /ai platform/i,
+    /ai engineer/i,
+    /ai researcher/i,
+    /ai research/i,
+    /ai product/i,
+    /ai consultant/i,
+    /ai consulting/i,
+    /ai solutions/i,
+    /ai architect/i,
+    /prompt engineer/i,
+    /agentic ai/i
   ];
 
-  const wellfoundAiJob = aiJobSignals.some((signal) =>
-    lowerTitle.includes(signal)
+  const wellfoundAiJob = aiJobPatterns.some((pattern) =>
+    pattern.test(title)
   );
 
   const sourceRules = isWellfound
