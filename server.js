@@ -1155,6 +1155,44 @@ ${identityRule}
   return cleanGeneratedPost(raw);
 }
 
+app.get("/api/affiliate/:id/content/preview", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM affiliate WHERE id = $1 AND active = 1 LIMIT 1",
+      [req.params.id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        preview: false,
+        error: "Active affiliate not found"
+      });
+    }
+
+    const affiliate = rows[0];
+    const aiPost = await generateAffiliatePostWithAI(affiliate);
+
+    res.json({
+      preview: true,
+      saved: false,
+      published: false,
+      affiliate: {
+        id: affiliate.id,
+        product: affiliate.product,
+        company: affiliate.company,
+        disclosure: affiliate.disclosure || "Affiliate link"
+      },
+      post: aiPost
+    });
+  } catch (error) {
+    console.error("Affiliate preview error:", error);
+    res.status(500).json({
+      preview: false,
+      error: error.message
+    });
+  }
+});
+
 app.get("/api/affiliate/:id/content", async (req, res) => {
   try {
     const { rows } = await pool.query(
