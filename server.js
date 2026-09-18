@@ -3630,6 +3630,17 @@ async function startServer() {
   try {
     await initializeDatabase();
 
+    if (BOT_TOKEN && process.env.PUBLIC_BASE_URL) {
+      const miniAppUrl = `${process.env.PUBLIC_BASE_URL.replace(/\\/$/, "")}/miniapp`;
+      telegram("setChatMenuButton", {
+        menu_button: {
+          type: "web_app",
+          text: "🚀 Open AI Hub",
+          web_app: { url: miniAppUrl }
+        }
+      }).catch((error) => console.error("Telegram Mini App menu setup failed:", error.message));
+    }
+
     app.listen(PORT, () => {
       console.log(
         `AI Opportunity Hub running on port ${PORT}`
