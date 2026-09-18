@@ -1057,6 +1057,72 @@ app.get(
 );
 
 
+app.get("/api/affiliate/:id/content", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM affiliate WHERE id = $1 AND active = 1 LIMIT 1",
+      [req.params.id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Active affiliate not found" });
+    }
+
+    const affiliate = rows[0];
+    const title = `🤖 AI Automation Tool: ${affiliate.product || affiliate.company}`;
+    const body =
+      `🤖 ${affiliate.product || affiliate.company}
+
+Explore ${affiliate.product || affiliate.company} for AI automation and related workflows.
+
+This is a partner recommendation from AI Opportunity Hub. Check the service details and pricing on the official site before signing up.
+
+🔗 Try it: https://ai-opportunity-hub.onrender.com/go/affiliate/${affiliate.id}
+ℹ️ ${affiliate.disclosure || "Affiliate link"}`;
+
+    const duplicate = await pool.query(
+      `SELECT id, status FROM content
+       WHERE LOWER(title) = LOWER($1)
+       LIMIT 1`,
+      [title]
+    );
+
+    if (duplicate.rows.length) {
+      return res.json({
+        created: false,
+        duplicate: true,
+        existing_content: duplicate.rows[0]
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO content
+       (title, body, category, source, source_url, ai_score, status)
+       VALUES ($1, $2, 'Digital Opportunities', $3, $4, 75, 'draft')
+       RETURNING *`,
+      [
+        title,
+        body,
+        affiliate.company || affiliate.product || "Partner",
+        affiliate.url || affiliate.affiliate_url || ""
+      ]
+    );
+
+    res.status(201).json({
+      created: true,
+      content: result.rows[0],
+      affiliate: {
+        id: affiliate.id,
+        product: affiliate.product,
+        company: affiliate.company,
+        disclosure: affiliate.disclosure || "Affiliate link"
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ created: false, error: error.message });
+  }
+});
+
 app.post("/api/affiliate/:id/content", async (req, res) => {
   try {
     const { rows } = await pool.query(
