@@ -1,5 +1,6 @@
 import express from "express";
 import pg from "pg";
+import * as cheerio from "cheerio";
 
 const { Pool } = pg;
 
@@ -130,6 +131,194 @@ async function telegram(method, body = {}) {
 }
 
 // ─────────────────────────────────────────────
+// Source fetcher
+// ─────────────────────────────────────────────
+
+async function fetchSource(url) {
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (compatible; AIOpportunityHubBot/1.0)"
+    },
+    redirect: "follow"
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Source returned HTTP ${response.status}`
+    );
+  }
+
+  return await response.text();
+}
+
+// ─────────────────────────────────────────────
+// Extract articles from HTML
+// ─────────────────────────────────────────────
+
+function extractArticles(html, sourceUrl) {
+  const $ = cheerio.load(html);
+  const articles = [];
+  const seenUrls = new Set();
+
+  $("article, main a, a").each((index, element) => {
+    if (articles.length >= 20) {
+      return;
+    }
+
+    const link = $(element).attr("href");
+    const title = $(element).text().replace(/\s+/g, " ").trim();
+
+    if (!link || !title) {
+      return;
+    }
+
+    if (title.length < 20 || title.length > 250) {
+      return;
+    }
+
+    const lowerTitle = title.toLowerCase();
+
+    const ignoredWords = [
+      "sign in",
+      "log in",
+      "subscribe",
+      "privacy",
+      "terms",
+      "cookie",
+      "contact",
+      "about",
+      "careers",
+      "search",
+      "menu"
+    ];
+
+    if (
+      ignoredWords.some((word) =>
+        lowerTitle.includes(word)
+      )
+    ) {
+      return;
+    }
+
+    let absoluteUrl;
+
+    try {
+      absoluteUrl = new URL(link, sourceUrl).href;
+    } catch {
+      return;
+    }
+
+    if (!absoluteUrl.startsWith("http")) {
+      return;
+    }
+
+    if (seenUrls.has(absoluteUrl)) {
+      return;
+    }
+
+    seenUrls.add(absoluteUrl);
+
+    articles.push({
+      title,
+      url: absoluteUrl
+    });
+  });
+
+  return articles;
+}
+
+// ─────────────────────────────────────────────
+// Check duplicate content
+// ─────────────────────────────────────────────
+
+async function contentExists(title, sourceUrl) {
+  const result = await pool.query(
+    `
+    SELECT id
+    FROM content
+    WHERE
+      LOWER(title) = LOWER($1)
+      OR source_url = $2
+    LIMIT 1
+    `,
+    [title, sourceUrl]
+  );
+
+  return result.rows.length > 0;
+}
+
+// ─────────────────────────────────────────────
+// Collect one source
+// ─────────────────────────────────────────────
+
+async function collectSource(source) {
+  const html = await fetchSource(source.url);
+
+  const articles = extractArticles(
+    html,
+    source.url
+  );
+
+  let saved = 0;
+  let duplicates = 0;
+
+  for (const article of articles) {
+    const exists = await contentExists(
+      article.title,
+      article.url
+    );
+
+    if (exists) {
+      duplicates++;
+      continue;
+    }
+
+    await pool.query(
+      `
+      INSERT INTO content (
+        title,
+        body,
+        category,
+        source,
+        source_url,
+        ai_score,
+        status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'draft')
+      `,
+      [
+        article.title,
+        `Collected from ${source.name}. AI processing has not been performed yet.`,
+        source.category || "AI News",
+        source.name,
+        article.url,
+        0
+      ]
+    );
+
+    saved++;
+  }
+
+  await pool.query(
+    `
+    UPDATE sources
+    SET last_checked = CURRENT_TIMESTAMP
+    WHERE id = $1
+    `,
+    [source.id]
+  );
+
+  return {
+    source_id: source.id,
+    source: source.name,
+    found: articles.length,
+    saved,
+    duplicates
+  };
+}
+
+// ─────────────────────────────────────────────
 // Home
 // ─────────────────────────────────────────────
 
@@ -137,7 +326,8 @@ app.get("/", (req, res) => {
   res.json({
     service: "AI Opportunity Hub",
     status: "online",
-    database: "Neon PostgreSQL"
+    database: "Neon PostgreSQL",
+    collector: "ready"
   });
 });
 
@@ -190,7 +380,7 @@ app.get("/database-test", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Telegram connection test
+// Telegram test
 // ─────────────────────────────────────────────
 
 app.get("/telegram-test", async (req, res) => {
@@ -263,10 +453,15 @@ app.post("/api/content", async (req, res) => {
       `
       SELECT id, title, status
       FROM content
-      WHERE LOWER(title) = LOWER($1)
+      WHERE
+        LOWER(title) = LOWER($1)
+        OR (
+          source_url <> ''
+          AND source_url = $2
+        )
       LIMIT 1
       `,
-      [title.trim()]
+      [title.trim(), source_url]
     );
 
     if (duplicate.rows.length > 0) {
@@ -314,11 +509,7 @@ app.post("/api/content", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Get all content
-// Supports:
-// /api/content
-// /api/content?status=draft
-// /api/content?category=AI%20Tools
+// Get content
 // ─────────────────────────────────────────────
 
 app.get("/api/content", async (req, res) => {
@@ -441,7 +632,9 @@ app.patch("/api/content/:id", async (req, res) => {
         category ?? null,
         source ?? null,
         source_url ?? null,
-        ai_score !== undefined ? Number(ai_score) : null,
+        ai_score !== undefined
+          ? Number(ai_score)
+          : null,
         status ?? null,
         req.params.id
       ]
@@ -513,7 +706,6 @@ app.patch("/api/content/:id/published", async (req, res) => {
 
 // ─────────────────────────────────────────────
 // Publish content to Telegram
-// POST endpoint
 // ─────────────────────────────────────────────
 
 app.post("/api/content/:id/publish", async (req, res) => {
@@ -544,7 +736,8 @@ app.post("/api/content/:id/publish", async (req, res) => {
     if (content.status === "published") {
       return res.status(409).json({
         error: "Content has already been published",
-        telegram_message_id: content.telegram_message_id
+        telegram_message_id:
+          content.telegram_message_id
       });
     }
 
@@ -578,7 +771,8 @@ app.post("/api/content/:id/publish", async (req, res) => {
     res.json({
       published: true,
       channel: CHANNEL_USERNAME,
-      telegram_message_id: result.result.message_id,
+      telegram_message_id:
+        result.result.message_id,
       content: updated.rows[0]
     });
   } catch (error) {
@@ -591,7 +785,6 @@ app.post("/api/content/:id/publish", async (req, res) => {
 
 // ─────────────────────────────────────────────
 // Browser publishing test
-// GET endpoint
 // ─────────────────────────────────────────────
 
 app.get("/publish-test/:id", async (req, res) => {
@@ -622,7 +815,8 @@ app.get("/publish-test/:id", async (req, res) => {
     if (content.status === "published") {
       return res.status(409).json({
         error: "Content has already been published",
-        telegram_message_id: content.telegram_message_id
+        telegram_message_id:
+          content.telegram_message_id
       });
     }
 
@@ -656,7 +850,8 @@ app.get("/publish-test/:id", async (req, res) => {
     res.json({
       published: true,
       channel: CHANNEL_USERNAME,
-      telegram_message_id: result.result.message_id,
+      telegram_message_id:
+        result.result.message_id,
       content: updated.rows[0]
     });
   } catch (error) {
@@ -668,7 +863,30 @@ app.get("/publish-test/:id", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Sources
+// Get sources
+// ─────────────────────────────────────────────
+
+app.get("/api/sources", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM sources
+      ORDER BY name ASC
+    `);
+
+    res.json({
+      count: result.rows.length,
+      sources: result.rows
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Add source
 // ─────────────────────────────────────────────
 
 app.post("/api/sources", async (req, res) => {
@@ -718,142 +936,31 @@ app.post("/api/sources", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Get sources
+// Collect all active sources
 // ─────────────────────────────────────────────
 
-app.get("/api/sources", async (req, res) => {
+app.get("/api/collect", async (req, res) => {
   try {
-    const result = await pool.query(`
+    const sourceResult = await pool.query(`
       SELECT *
       FROM sources
-      ORDER BY name ASC
+      WHERE active = 1
+      ORDER BY id ASC
     `);
 
-    res.json({
-      count: result.rows.length,
-      sources: result.rows
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: error.message
-    });
-  }
-});
+    const results = [];
 
-// ─────────────────────────────────────────────
-// Analytics
-// ─────────────────────────────────────────────
+    for (const source of sourceResult.rows) {
+      try {
+        const result = await collectSource(source);
 
-app.post("/api/analytics", async (req, res) => {
-  try {
-    const {
-      content_id,
-      views = 0,
-      reactions = 0,
-      comments = 0,
-      clicks = 0,
-      performance_score = 0
-    } = req.body;
-
-    if (!content_id) {
-      return res.status(400).json({
-        error: "content_id is required"
-      });
-    }
-
-    const numericViews = Number(views) || 0;
-    const numericClicks = Number(clicks) || 0;
-
-    const ctr =
-      numericViews > 0
-        ? (numericClicks / numericViews) * 100
-        : 0;
-
-    const result = await pool.query(
-      `
-      INSERT INTO analytics (
-        content_id,
-        views,
-        reactions,
-        comments,
-        clicks,
-        ctr,
-        performance_score
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *
-      `,
-      [
-        content_id,
-        numericViews,
-        Number(reactions) || 0,
-        Number(comments) || 0,
-        numericClicks,
-        ctr,
-        Number(performance_score) || 0
-      ]
-    );
-
-    res.status(201).json({
-      saved: true,
-      analytics: result.rows[0]
-    });
-  } catch (error) {
-    res.status(500).json({
-      saved: false,
-      error: error.message
-    });
-  }
-});
-
-// ─────────────────────────────────────────────
-// Get analytics for content
-// ─────────────────────────────────────────────
-
-app.get("/api/analytics/:contentId", async (req, res) => {
-  try {
-    const result = await pool.query(
-      `
-      SELECT *
-      FROM analytics
-      WHERE content_id = $1
-      ORDER BY recorded_at DESC
-      `,
-      [req.params.contentId]
-    );
-
-    res.json({
-      count: result.rows.length,
-      analytics: result.rows
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: error.message
-    });
-  }
-});
-
-// ─────────────────────────────────────────────
-// Start server
-// ─────────────────────────────────────────────
-
-async function startServer() {
-  try {
-    await initializeDatabase();
-
-    app.listen(PORT, () => {
-      console.log(
-        `AI Opportunity Hub running on port ${PORT}`
-      );
-    });
-  } catch (error) {
-    console.error(
-      "Failed to start server:",
-      error
-    );
-
-    process.exit(1);
-  }
-}
-
-startServer();
+        results.push({
+          success: true,
+          ...result
+        });
+      } catch (error) {
+        results.push({
+          success: false,
+          source_id: source.id,
+          source: source.name,
+    
