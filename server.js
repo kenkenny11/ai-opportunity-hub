@@ -1089,6 +1089,39 @@ Set publishable=true only when score >= 75. Do not invent facts.`;
   };
 }
 
+app.get("/api/ai/score/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM content WHERE id = $1 LIMIT 1",
+      [req.params.id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Content not found" });
+    }
+
+    const result = await scoreContentWithAI(rows[0]);
+
+    await pool.query(
+      "UPDATE content SET ai_score = $1, category = $2 WHERE id = $3",
+      [result.score, result.category, req.params.id]
+    );
+
+    res.json({
+      scored: true,
+      id: rows[0].id,
+      title: rows[0].title,
+      score: result.score,
+      category: result.category,
+      publishable: result.publishable,
+      reason: result.reason
+    });
+  } catch (error) {
+    console.error("AI scoring error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/ai/score/:id", async (req, res) => {
   try {
     const { rows } = await pool.query(
