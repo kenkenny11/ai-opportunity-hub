@@ -37,62 +37,67 @@ const pool = new Pool({
 // ─────────────────────────────────────────────
 
 async function initializeDatabase() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS content (
-      id SERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      body TEXT NOT NULL,
-      category TEXT DEFAULT 'AI Tools',
-      source TEXT,
-      source_url TEXT,
-      ai_score INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'draft',
-      telegram_message_id INTEGER,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      published_at TIMESTAMP
-    )
-  `);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS content (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        category TEXT DEFAULT 'AI Tools',
+        source TEXT,
+        source_url TEXT,
+        ai_score INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'draft',
+        telegram_message_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        published_at TIMESTAMP
+      )
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS sources (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      url TEXT NOT NULL,
-      category TEXT,
-      active INTEGER DEFAULT 1,
-      reliability INTEGER DEFAULT 50,
-      last_checked TIMESTAMP
-    )
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sources (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        category TEXT,
+        active INTEGER DEFAULT 1,
+        reliability INTEGER DEFAULT 50,
+        last_checked TIMESTAMP
+      )
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS affiliate (
-      id SERIAL PRIMARY KEY,
-      product TEXT,
-      company TEXT,
-      url TEXT,
-      affiliate_url TEXT,
-      commission TEXT,
-      active INTEGER DEFAULT 1,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS affiliate (
+        id SERIAL PRIMARY KEY,
+        product TEXT,
+        company TEXT,
+        url TEXT,
+        affiliate_url TEXT,
+        commission TEXT,
+        active INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS analytics (
-      id SERIAL PRIMARY KEY,
-      content_id INTEGER,
-      views INTEGER DEFAULT 0,
-      reactions INTEGER DEFAULT 0,
-      comments INTEGER DEFAULT 0,
-      clicks INTEGER DEFAULT 0,
-      ctr REAL DEFAULT 0,
-      performance_score REAL DEFAULT 0,
-      recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS analytics (
+        id SERIAL PRIMARY KEY,
+        content_id INTEGER,
+        views INTEGER DEFAULT 0,
+        reactions INTEGER DEFAULT 0,
+        comments INTEGER DEFAULT 0,
+        clicks INTEGER DEFAULT 0,
+        ctr REAL DEFAULT 0,
+        performance_score REAL DEFAULT 0,
+        recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-  console.log("PostgreSQL database initialized");
+    console.log("PostgreSQL database initialized");
+  } catch (error) {
+    console.error("Database initialization error:", error);
+    throw error;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -125,6 +130,18 @@ async function telegram(method, body = {}) {
 }
 
 // ─────────────────────────────────────────────
+// Home
+// ─────────────────────────────────────────────
+
+app.get("/", (req, res) => {
+  res.json({
+    service: "AI Opportunity Hub",
+    status: "online",
+    database: "Neon PostgreSQL"
+  });
+});
+
+// ─────────────────────────────────────────────
 // Health
 // ─────────────────────────────────────────────
 
@@ -148,19 +165,7 @@ app.get("/health", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Home
-// ─────────────────────────────────────────────
-
-app.get("/", (req, res) => {
-  res.json({
-    service: "AI Opportunity Hub",
-    status: "online",
-    database: "Neon PostgreSQL"
-  });
-});
-
-// ─────────────────────────────────────────────
-// Database status
+// Database test
 // ─────────────────────────────────────────────
 
 app.get("/database-test", async (req, res) => {
@@ -205,7 +210,7 @@ app.get("/telegram-test", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Send private Telegram test
+// Private Telegram test
 // ─────────────────────────────────────────────
 
 app.get("/send-test", async (req, res) => {
@@ -254,7 +259,6 @@ app.post("/api/content", async (req, res) => {
       });
     }
 
-    // Duplicate protection
     const duplicate = await pool.query(
       `
       SELECT id, title, status
@@ -310,7 +314,11 @@ app.post("/api/content", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Get content
+// Get all content
+// Supports:
+// /api/content
+// /api/content?status=draft
+// /api/content?category=AI%20Tools
 // ─────────────────────────────────────────────
 
 app.get("/api/content", async (req, res) => {
@@ -504,7 +512,163 @@ app.patch("/api/content/:id/published", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Add source
+// Publish content to Telegram
+// POST endpoint
+// ─────────────────────────────────────────────
+
+app.post("/api/content/:id/publish", async (req, res) => {
+  try {
+    if (!CHANNEL_USERNAME) {
+      return res.status(500).json({
+        error: "TELEGRAM_CHANNEL_USERNAME is not configured"
+      });
+    }
+
+    const contentResult = await pool.query(
+      `
+      SELECT *
+      FROM content
+      WHERE id = $1
+      `,
+      [req.params.id]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({
+        error: "Content not found"
+      });
+    }
+
+    const content = contentResult.rows[0];
+
+    if (content.status === "published") {
+      return res.status(409).json({
+        error: "Content has already been published",
+        telegram_message_id: content.telegram_message_id
+      });
+    }
+
+    const message =
+      `🤖 ${content.title}\n\n` +
+      `${content.body}\n\n` +
+      `📌 ${content.category}`;
+
+    const result = await telegram("sendMessage", {
+      chat_id: CHANNEL_USERNAME,
+      text: message,
+      disable_web_page_preview: false
+    });
+
+    const updated = await pool.query(
+      `
+      UPDATE content
+      SET
+        status = 'published',
+        telegram_message_id = $1,
+        published_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+      `,
+      [
+        result.result.message_id,
+        content.id
+      ]
+    );
+
+    res.json({
+      published: true,
+      channel: CHANNEL_USERNAME,
+      telegram_message_id: result.result.message_id,
+      content: updated.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      published: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Browser publishing test
+// GET endpoint
+// ─────────────────────────────────────────────
+
+app.get("/publish-test/:id", async (req, res) => {
+  try {
+    if (!CHANNEL_USERNAME) {
+      return res.status(500).json({
+        error: "TELEGRAM_CHANNEL_USERNAME is not configured"
+      });
+    }
+
+    const contentResult = await pool.query(
+      `
+      SELECT *
+      FROM content
+      WHERE id = $1
+      `,
+      [req.params.id]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({
+        error: "Content not found"
+      });
+    }
+
+    const content = contentResult.rows[0];
+
+    if (content.status === "published") {
+      return res.status(409).json({
+        error: "Content has already been published",
+        telegram_message_id: content.telegram_message_id
+      });
+    }
+
+    const message =
+      `🤖 ${content.title}\n\n` +
+      `${content.body}\n\n` +
+      `📌 ${content.category}`;
+
+    const result = await telegram("sendMessage", {
+      chat_id: CHANNEL_USERNAME,
+      text: message,
+      disable_web_page_preview: false
+    });
+
+    const updated = await pool.query(
+      `
+      UPDATE content
+      SET
+        status = 'published',
+        telegram_message_id = $1,
+        published_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+      `,
+      [
+        result.result.message_id,
+        content.id
+      ]
+    );
+
+    res.json({
+      published: true,
+      channel: CHANNEL_USERNAME,
+      telegram_message_id: result.result.message_id,
+      content: updated.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      published: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Sources
 // ─────────────────────────────────────────────
 
 app.post("/api/sources", async (req, res) => {
@@ -577,82 +741,6 @@ app.get("/api/sources", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Telegram channel publishing
-// ─────────────────────────────────────────────
-
-app.post("/api/content/:id/publish", async (req, res) => {
-  try {
-    if (!CHANNEL_USERNAME) {
-      return res.status(500).json({
-        error: "TELEGRAM_CHANNEL_USERNAME is not configured"
-      });
-    }
-
-    const contentResult = await pool.query(
-      `
-      SELECT *
-      FROM content
-      WHERE id = $1
-      `,
-      [req.params.id]
-    );
-
-    if (contentResult.rows.length === 0) {
-      return res.status(404).json({
-        error: "Content not found"
-      });
-    }
-
-    const content = contentResult.rows[0];
-
-    if (content.status === "published") {
-      return res.status(409).json({
-        error: "Content has already been published",
-        telegram_message_id: content.telegram_message_id
-      });
-    }
-
-    const message = `🤖 ${content.title}
-
-${content.body}
-
-📌 ${content.category}`;
-
-    const result = await telegram("sendMessage", {
-      chat_id: CHANNEL_USERNAME,
-      text: message,
-      disable_web_page_preview: false
-    });
-
-    const updated = await pool.query(
-      `
-      UPDATE content
-      SET
-        status = 'published',
-        telegram_message_id = $1,
-        published_at = CURRENT_TIMESTAMP
-      WHERE id = $2
-      RETURNING *
-      `,
-      [
-        result.result.message_id,
-        content.id
-      ]
-    );
-
-    res.json({
-      published: true,
-      content: updated.rows[0]
-    });
-  } catch (error) {
-    res.status(500).json({
-      published: false,
-      error: error.message
-    });
-  }
-});
-
-// ─────────────────────────────────────────────
 // Analytics
 // ─────────────────────────────────────────────
 
@@ -719,7 +807,7 @@ app.post("/api/analytics", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Analytics for one content item
+// Get analytics for content
 // ─────────────────────────────────────────────
 
 app.get("/api/analytics/:contentId", async (req, res) => {
@@ -754,10 +842,16 @@ async function startServer() {
     await initializeDatabase();
 
     app.listen(PORT, () => {
-      console.log(`AI Opportunity Hub running on port ${PORT}`);
+      console.log(
+        `AI Opportunity Hub running on port ${PORT}`
+      );
     });
   } catch (error) {
-    console.error("Failed to start server:", error);
+    console.error(
+      "Failed to start server:",
+      error
+    );
+
     process.exit(1);
   }
 }
