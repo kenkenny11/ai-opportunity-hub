@@ -1126,9 +1126,19 @@ This is a partner recommendation from AI Opportunity Hub. Check the service deta
       ]
     );
 
+    const trackedBody = body.replace(
+      `/go/affiliate/${affiliate.id}`,
+      `/go/affiliate/${affiliate.id}?content_id=${result.rows[0].id}`
+    );
+
+    const updated = await pool.query(
+      "UPDATE content SET body = $1 WHERE id = $2 RETURNING *",
+      [trackedBody, result.rows[0].id]
+    );
+
     res.status(201).json({
       created: true,
-      content: result.rows[0],
+      content: updated.rows[0],
       affiliate: {
         id: affiliate.id,
         product: affiliate.product,
@@ -1197,9 +1207,19 @@ This is a partner recommendation from AI Opportunity Hub. Check the service deta
       ]
     );
 
+    const trackedBody = body.replace(
+      `/go/affiliate/${affiliate.id}`,
+      `/go/affiliate/${affiliate.id}?content_id=${result.rows[0].id}`
+    );
+
+    const updated = await pool.query(
+      "UPDATE content SET body = $1 WHERE id = $2 RETURNING *",
+      [trackedBody, result.rows[0].id]
+    );
+
     res.status(201).json({
       created: true,
-      content: result.rows[0],
+      content: updated.rows[0],
       affiliate: {
         id: affiliate.id,
         product: affiliate.product,
@@ -1399,7 +1419,7 @@ app.get("/api/affiliate/dashboard", async (req, res) => {
          c.published_at,
          COUNT(ac.id)::int AS affiliate_clicks
        FROM content c
-       LEFT JOIN analytics ac
+       LEFT JOIN affiliate_clicks ac
          ON ac.content_id = c.id
        WHERE c.category = 'Digital Opportunities'
        GROUP BY c.id
@@ -2498,150 +2518,3 @@ async function runAutomationCycle() {
       `http://127.0.0.1:${PORT}/api/collect`
     );
     const collectResult = await collectResponse.json();
-    console.log("Collector:", collectResult.total_saved ?? collectResult.error);
-
-    const scoreResult = await pool.query(
-      `SELECT *
-       FROM content
-       WHERE status = 'draft'
-         AND (ai_score IS NULL OR ai_score = 0)
-       ORDER BY id DESC
-       LIMIT 10`
-    );
-
-    let scored = 0;
-    for (const content of scoreResult.rows) {
-      try {
-        const evaluation = await scoreContentWithAI(content);
-
-        await pool.query(
-          `UPDATE content
-           SET ai_score = $1,
-               category = $2
-           WHERE id = $3`,
-          [evaluation.score, evaluation.category, content.id]
-        );
-
-        scored++;
-        console.log(`Scored #${content.id}: ${evaluation.score}`);
-      } catch (error) {
-        console.error(`Scoring #${content.id} failed:`, error.message);
-      }
-    }
-
-    const generateResult = await pool.query(
-      `SELECT *
-       FROM content
-       WHERE status = 'draft'
-         AND ai_score >= 75
-         AND (body IS NULL OR body = '' OR body LIKE 'Collected from %')
-       ORDER BY ai_score DESC, id DESC
-       LIMIT 5`
-    );
-
-    let generated = 0;
-    for (const content of generateResult.rows) {
-      try {
-        let post = await generateContentWithAI(content);
-        post = await addAffiliateTrackingToPost(post, content);
-
-        await pool.query(
-          "UPDATE content SET body = $1 WHERE id = $2",
-          [post, content.id]
-        );
-
-        generated++;
-        console.log(`Generated #${content.id}`);
-      } catch (error) {
-        console.error(`Generation #${content.id} failed:`, error.message);
-      }
-    }
-
-    const publishResult = await pool.query(
-      `SELECT *
-       FROM content
-       WHERE status = 'draft'
-         AND ai_score >= 75
-         AND body IS NOT NULL
-         AND body <> ''
-         AND body NOT LIKE 'Collected from %'
-       ORDER BY ai_score DESC, id DESC
-       LIMIT 3`
-    );
-
-    let published = 0;
-    for (const content of publishResult.rows) {
-      try {
-        const telegramResult = await telegram("sendMessage", {
-          chat_id: CHANNEL_USERNAME,
-          text: content.body,
-          disable_web_page_preview: false
-        });
-
-        await pool.query(
-          `UPDATE content
-           SET status = 'published',
-               telegram_message_id = $1,
-               published_at = CURRENT_TIMESTAMP
-           WHERE id = $2
-             AND status = 'draft'`,
-          [telegramResult.result.message_id, content.id]
-        );
-
-        published++;
-        console.log(
-          `Published #${content.id} as Telegram message ${telegramResult.result.message_id}`
-        );
-      } catch (error) {
-        console.error(`Publishing #${content.id} failed:`, error.message);
-      }
-    }
-
-    console.log(
-      `Automation complete: scored=${scored}, generated=${generated}, published=${published}`
-    );
-
-    return {
-      collected: collectResult,
-      scored,
-      generated,
-      published
-    };
-  } catch (error) {
-    console.error("Automation cycle failed:", error);
-    return {
-      scored: 0,
-      generated: 0,
-      published: 0,
-      error: error.message
-    };
-  }
-}
-
-async function startServer() {
-  try {
-    await initializeDatabase();
-
-    app.listen(PORT, () => {
-      console.log(
-        `AI Opportunity Hub running on port ${PORT}`
-      );
-
-      setTimeout(() => {
-        runAutomationCycle();
-      }, 15000);
-
-      setInterval(() => {
-        runAutomationCycle();
-      }, 30 * 60 * 1000);
-    });
-  } catch (error) {
-    console.error(
-      "Failed to start server:",
-      error
-    );
-    process.exit(1);
-  }
-}
-
-startServer();
