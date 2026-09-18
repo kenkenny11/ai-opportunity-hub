@@ -1238,7 +1238,17 @@ app.get("/api/affiliate/content/:id/publish", async (req, res) => {
       });
     }
 
-    const telegramMessageId = await publishToTelegram(content);
+    const telegramResult = await telegram("sendMessage", {
+      chat_id: CHANNEL_USERNAME,
+      text: content.body,
+      disable_web_page_preview: false
+    });
+
+    if (!telegramResult?.ok || !telegramResult?.result?.message_id) {
+      throw new Error(telegramResult?.description || "Telegram publish failed");
+    }
+
+    const telegramMessageId = telegramResult.result.message_id;
 
     await pool.query(
       `UPDATE content
