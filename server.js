@@ -1117,7 +1117,10 @@ Rules:
 - Return ONLY the finished Telegram post.
 
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  - Return ONLY the finished Telegram post.
+`;
+
+  const response =
     method: "POST",
     headers: {
       "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
