@@ -224,8 +224,25 @@ function extractArticles(html, sourceUrl) {
         return false;
       }
 
-      const microsoftArticlePattern = /^\\/blog\\/[0-9]{4}\\/[0-9]{2}\\/[0-9]{2}\\//;
-      return microsoftArticlePattern.test(parsed.pathname);
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      const year = parts[1];
+      const month = parts[2];
+      const day = parts[3];
+
+      const isMicrosoftArticle =
+        parts.length >= 4 &&
+        parts[0] === "blog" &&
+        year &&
+        year.length === 4 &&
+        month &&
+        month.length === 2 &&
+        day &&
+        day.length === 2 &&
+        !Number.isNaN(Number(year)) &&
+        !Number.isNaN(Number(month)) &&
+        !Number.isNaN(Number(day));
+
+      return isMicrosoftArticle;
     }
 
     if (sourceHost.includes("huggingface.co")) {
