@@ -100,13 +100,18 @@ async function initializeDatabase() {
     )
   `);
 
-  await pool.query(`
-    INSERT INTO premium_products (title, description, price_stars, content, active)
-    SELECT
-      'AI Opportunity Starter Pack',
-      'A practical starter pack for finding, evaluating and using AI tools and opportunities.',
-      50,
-      'AI OPPORTUNITY STARTER PACK
+  const premiumCheck = await pool.query(
+    "SELECT id FROM premium_products WHERE title = $1 LIMIT 1",
+    ["AI Opportunity Starter Pack"]
+  );
+  if (premiumCheck.rowCount === 0) {
+    await pool.query(`
+      INSERT INTO premium_products (title, description, price_stars, content, active)
+      VALUES (
+        'AI Opportunity Starter Pack',
+        'A practical starter pack for finding, evaluating and using AI tools and opportunities.',
+        50,
+        'AI OPPORTUNITY STARTER PACK
 
 1. TOOL CHECKLIST
 - Verify the official website before signing up.
@@ -127,13 +132,11 @@ async function initializeDatabase() {
 Hook -> verified fact -> practical use -> source -> question.
 
 This starter pack is delivered digitally through AI Opportunity Hub after payment.',
-      50,
-      1
-    WHERE NOT EXISTS (
-      SELECT 1 FROM premium_products WHERE title = 'AI Opportunity Starter Pack'
-    )
-  `);
-
+        50,
+        1
+      )
+    `);
+  }
 
 
   await pool.query(`
@@ -797,8 +800,7 @@ app.post("/api/content", async (req, res) => {
         source,
         source_url,
         Number(ai_score) || 0
-      ]
-    );
+      ]    );
 
     res.status(201).json({
       saved: true,
@@ -1597,8 +1599,7 @@ app.get("/api/affiliate/content/:id/publish", async (req, res) => {
       `UPDATE content
        SET status = 'published',
            telegram_message_id = $1,
-           published_at = CURRENT_TIMESTAMP
-       WHERE id = $2`,
+           published_at = CURRENT_TIMESTAMP       WHERE id = $2`,
       [telegramMessageId, content.id]
     );
 
@@ -2397,8 +2398,7 @@ async function addAffiliateTrackingToPost(post, content) {
     `SELECT *
      FROM affiliate
      WHERE active = 1
-       AND affiliate_url IS NOT NULL
-       AND affiliate_url <> ''
+       AND affiliate_url IS NOT NULL       AND affiliate_url <> ''
      ORDER BY id ASC`
   );
 
