@@ -17,13 +17,13 @@ const TEST_CHAT_ID = process.env.TELEGRAM_TEST_CHAT_ID;
 const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
 const DATABASE_URL = process.env.DATABASE_URL;
 
+// ─────────────────────────────────────────────
+// PostgreSQL
+// ─────────────────────────────────────────────
+
 if (!DATABASE_URL) {
   console.error("DATABASE_URL is not configured");
 }
-
-// ─────────────────────────────────────────────
-// PostgreSQL connection
-// ─────────────────────────────────────────────
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -37,66 +37,62 @@ const pool = new Pool({
 // ─────────────────────────────────────────────
 
 async function initializeDatabase() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS content (
-        id SERIAL PRIMARY KEY,
-        title TEXT,
-        body TEXT,
-        category TEXT,
-        source TEXT,
-        source_url TEXT,
-        ai_score INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'draft',
-        telegram_message_id INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        published_at TIMESTAMP
-      )
-    `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      category TEXT DEFAULT 'AI Tools',
+      source TEXT,
+      source_url TEXT,
+      ai_score INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'draft',
+      telegram_message_id INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      published_at TIMESTAMP
+    )
+  `);
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sources (
-        id SERIAL PRIMARY KEY,
-        name TEXT,
-        url TEXT,
-        category TEXT,
-        active INTEGER DEFAULT 1,
-        reliability INTEGER DEFAULT 50,
-        last_checked TIMESTAMP
-      )
-    `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sources (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      category TEXT,
+      active INTEGER DEFAULT 1,
+      reliability INTEGER DEFAULT 50,
+      last_checked TIMESTAMP
+    )
+  `);
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS affiliate (
-        id SERIAL PRIMARY KEY,
-        product TEXT,
-        company TEXT,
-        url TEXT,
-        affiliate_url TEXT,
-        commission TEXT,
-        active INTEGER DEFAULT 1,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS affiliate (
+      id SERIAL PRIMARY KEY,
+      product TEXT,
+      company TEXT,
+      url TEXT,
+      affiliate_url TEXT,
+      commission TEXT,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS analytics (
-        id SERIAL PRIMARY KEY,
-        content_id INTEGER,
-        views INTEGER DEFAULT 0,
-        reactions INTEGER DEFAULT 0,
-        comments INTEGER DEFAULT 0,
-        clicks INTEGER DEFAULT 0,
-        ctr REAL DEFAULT 0,
-        performance_score REAL DEFAULT 0,
-        recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS analytics (
+      id SERIAL PRIMARY KEY,
+      content_id INTEGER,
+      views INTEGER DEFAULT 0,
+      reactions INTEGER DEFAULT 0,
+      comments INTEGER DEFAULT 0,
+      clicks INTEGER DEFAULT 0,
+      ctr REAL DEFAULT 0,
+      performance_score REAL DEFAULT 0,
+      recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
-    console.log("PostgreSQL database initialized successfully");
-  } catch (error) {
-    console.error("Database initialization error:", error);
-  }
+  console.log("PostgreSQL database initialized");
 }
 
 // ─────────────────────────────────────────────
@@ -119,20 +115,14 @@ async function telegram(method, body = {}) {
     }
   );
 
-  return await response.json();
+  const data = await response.json();
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.description || "Telegram API request failed");
+  }
+
+  return data;
 }
-
-// ─────────────────────────────────────────────
-// Home
-// ─────────────────────────────────────────────
-
-app.get("/", (req, res) => {
-  res.json({
-    service: "AI Opportunity Hub",
-    status: "online",
-    database: "Neon PostgreSQL"
-  });
-});
 
 // ─────────────────────────────────────────────
 // Health
@@ -145,7 +135,8 @@ app.get("/health", async (req, res) => {
     res.json({
       status: "ok",
       service: "AI Opportunity Hub",
-      database: "connected"
+      database: "connected",
+      telegram: BOT_TOKEN ? "configured" : "missing"
     });
   } catch (error) {
     res.status(500).json({
@@ -157,84 +148,15 @@ app.get("/health", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Telegram connection test
+// Home
 // ─────────────────────────────────────────────
 
-app.get("/telegram-test", async (req, res) => {
-  try {
-    const result = await telegram("getMe");
-
-    res.json({
-      connected: result.ok,
-      bot: result.result || null
-    });
-  } catch (error) {
-    res.status(500).json({
-      connected: false,
-      error: error.message
-    });
-  }
-});
-
-// ─────────────────────────────────────────────
-// Private Telegram test
-// ─────────────────────────────────────────────
-
-app.get("/send-test", async (req, res) => {
-  try {
-    if (!TEST_CHAT_ID) {
-      return res.status(500).json({
-        error: "TELEGRAM_TEST_CHAT_ID is not configured"
-      });
-    }
-
-    const result = await telegram("sendMessage", {
-      chat_id: TEST_CHAT_ID,
-      text: "🤖 AI Opportunity Hub PostgreSQL backend is connected."
-    });
-
-    res.json({
-      sent: result.ok,
-      message_id: result.result?.message_id || null
-    });
-  } catch (error) {
-    res.status(500).json({
-      sent: false,
-      error: error.message
-    });
-  }
-});
-
-// ─────────────────────────────────────────────
-// Channel publishing test
-// ─────────────────────────────────────────────
-
-app.get("/publish-test", async (req, res) => {
-  try {
-    if (!CHANNEL_USERNAME) {
-      return res.status(500).json({
-        error: "TELEGRAM_CHANNEL_USERNAME is not configured"
-      });
-    }
-
-    const result = await telegram("sendMessage", {
-      chat_id: CHANNEL_USERNAME,
-      text:
-        "🚀 AI Opportunity Hub\n\n" +
-        "Neon PostgreSQL database is connected successfully."
-    });
-
-    res.json({
-      published: result.ok,
-      message_id: result.result?.message_id || null,
-      channel: CHANNEL_USERNAME
-    });
-  } catch (error) {
-    res.status(500).json({
-      published: false,
-      error: error.message
-    });
-  }
+app.get("/", (req, res) => {
+  res.json({
+    service: "AI Opportunity Hub",
+    status: "online",
+    database: "Neon PostgreSQL"
+  });
 });
 
 // ─────────────────────────────────────────────
@@ -263,22 +185,91 @@ app.get("/database-test", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Create content using JSON
+// Telegram connection test
 // ─────────────────────────────────────────────
 
-app.post("/content-test", async (req, res) => {
+app.get("/telegram-test", async (req, res) => {
+  try {
+    const result = await telegram("getMe");
+
+    res.json({
+      connected: true,
+      bot: result.result
+    });
+  } catch (error) {
+    res.status(500).json({
+      connected: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Send private Telegram test
+// ─────────────────────────────────────────────
+
+app.get("/send-test", async (req, res) => {
+  try {
+    if (!TEST_CHAT_ID) {
+      return res.status(500).json({
+        error: "TELEGRAM_TEST_CHAT_ID is not configured"
+      });
+    }
+
+    const result = await telegram("sendMessage", {
+      chat_id: TEST_CHAT_ID,
+      text: "🤖 AI Opportunity Hub is connected."
+    });
+
+    res.json({
+      sent: true,
+      message_id: result.result.message_id
+    });
+  } catch (error) {
+    res.status(500).json({
+      sent: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Create content
+// ─────────────────────────────────────────────
+
+app.post("/api/content", async (req, res) => {
   try {
     const {
       title,
       body,
-      category,
-      source,
-      source_url
+      category = "AI Tools",
+      source = "Manual",
+      source_url = "",
+      ai_score = 0
     } = req.body;
 
     if (!title || !body) {
       return res.status(400).json({
         error: "title and body are required"
+      });
+    }
+
+    // Duplicate protection
+    const duplicate = await pool.query(
+      `
+      SELECT id, title, status
+      FROM content
+      WHERE LOWER(title) = LOWER($1)
+      LIMIT 1
+      `,
+      [title.trim()]
+    );
+
+    if (duplicate.rows.length > 0) {
+      return res.status(409).json({
+        saved: false,
+        duplicate: true,
+        existing_content: duplicate.rows[0]
       });
     }
 
@@ -290,65 +281,25 @@ app.post("/content-test", async (req, res) => {
         category,
         source,
         source_url,
+        ai_score,
         status
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id
+      VALUES ($1, $2, $3, $4, $5, $6, 'draft')
+      RETURNING *
       `,
       [
-        title,
-        body,
-        category || "AI Tools",
-        source || "Manual",
-        source_url || "",
-        "draft"
-      ]
-    );
-
-    res.json({
-      saved: true,
-      content_id: result.rows[0].id
-    });
-  } catch (error) {
-    res.status(500).json({
-      saved: false,
-      error: error.message
-    });
-  }
-});
-
-// ─────────────────────────────────────────────
-// Browser-friendly content test
-// ─────────────────────────────────────────────
-
-app.get("/content-test", async (req, res) => {
-  try {
-    const result = await pool.query(
-      `
-      INSERT INTO content (
-        title,
-        body,
+        title.trim(),
+        body.trim(),
         category,
         source,
         source_url,
-        status
-      )
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id
-      `,
-      [
-        "5 Free AI Tools You Should Try",
-        "Here are five useful AI tools that can help with writing, research, productivity, and content creation.",
-        "AI Tools",
-        "AI Opportunity Hub",
-        "",
-        "draft"
+        Number(ai_score) || 0
       ]
     );
 
-    res.json({
+    res.status(201).json({
       saved: true,
-      content_id: result.rows[0].id
+      content: result.rows[0]
     });
   } catch (error) {
     res.status(500).json({
@@ -359,16 +310,52 @@ app.get("/content-test", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// Get all content
+// Get content
 // ─────────────────────────────────────────────
 
-app.get("/content", async (req, res) => {
+app.get("/api/content", async (req, res) => {
   try {
-    const result = await pool.query(`
+    const {
+      category,
+      status,
+      limit = 50
+    } = req.query;
+
+    const values = [];
+    const conditions = [];
+
+    if (category) {
+      values.push(category);
+      conditions.push(`category = $${values.length}`);
+    }
+
+    if (status) {
+      values.push(status);
+      conditions.push(`status = $${values.length}`);
+    }
+
+    const safeLimit = Math.min(
+      Math.max(parseInt(limit, 10) || 50, 1),
+      100
+    );
+
+    values.push(safeLimit);
+
+    const whereClause =
+      conditions.length > 0
+        ? `WHERE ${conditions.join(" AND ")}`
+        : "";
+
+    const result = await pool.query(
+      `
       SELECT *
       FROM content
+      ${whereClause}
       ORDER BY created_at DESC
-    `);
+      LIMIT $${values.length}
+      `,
+      values
+    );
 
     res.json({
       count: result.rows.length,
@@ -382,15 +369,397 @@ app.get("/content", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+// Get one content item
+// ─────────────────────────────────────────────
+
+app.get("/api/content/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT *
+      FROM content
+      WHERE id = $1
+      `,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: "Content not found"
+      });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Update content
+// ─────────────────────────────────────────────
+
+app.patch("/api/content/:id", async (req, res) => {
+  try {
+    const {
+      title,
+      body,
+      category,
+      source,
+      source_url,
+      ai_score,
+      status
+    } = req.body;
+
+    const result = await pool.query(
+      `
+      UPDATE content
+      SET
+        title = COALESCE($1, title),
+        body = COALESCE($2, body),
+        category = COALESCE($3, category),
+        source = COALESCE($4, source),
+        source_url = COALESCE($5, source_url),
+        ai_score = COALESCE($6, ai_score),
+        status = COALESCE($7, status)
+      WHERE id = $8
+      RETURNING *
+      `,
+      [
+        title ?? null,
+        body ?? null,
+        category ?? null,
+        source ?? null,
+        source_url ?? null,
+        ai_score !== undefined ? Number(ai_score) : null,
+        status ?? null,
+        req.params.id
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: "Content not found"
+      });
+    }
+
+    res.json({
+      updated: true,
+      content: result.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      updated: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Mark content as published
+// ─────────────────────────────────────────────
+
+app.patch("/api/content/:id/published", async (req, res) => {
+  try {
+    const {
+      telegram_message_id
+    } = req.body;
+
+    const result = await pool.query(
+      `
+      UPDATE content
+      SET
+        status = 'published',
+        telegram_message_id = $1,
+        published_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+      `,
+      [
+        telegram_message_id
+          ? Number(telegram_message_id)
+          : null,
+        req.params.id
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: "Content not found"
+      });
+    }
+
+    res.json({
+      published: true,
+      content: result.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      published: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Add source
+// ─────────────────────────────────────────────
+
+app.post("/api/sources", async (req, res) => {
+  try {
+    const {
+      name,
+      url,
+      category = "General",
+      reliability = 50
+    } = req.body;
+
+    if (!name || !url) {
+      return res.status(400).json({
+        error: "name and url are required"
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO sources (
+        name,
+        url,
+        category,
+        reliability
+      )
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+      `,
+      [
+        name.trim(),
+        url.trim(),
+        category,
+        Number(reliability) || 50
+      ]
+    );
+
+    res.status(201).json({
+      saved: true,
+      source: result.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      saved: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Get sources
+// ─────────────────────────────────────────────
+
+app.get("/api/sources", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM sources
+      ORDER BY name ASC
+    `);
+
+    res.json({
+      count: result.rows.length,
+      sources: result.rows
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Telegram channel publishing
+// ─────────────────────────────────────────────
+
+app.post("/api/content/:id/publish", async (req, res) => {
+  try {
+    if (!CHANNEL_USERNAME) {
+      return res.status(500).json({
+        error: "TELEGRAM_CHANNEL_USERNAME is not configured"
+      });
+    }
+
+    const contentResult = await pool.query(
+      `
+      SELECT *
+      FROM content
+      WHERE id = $1
+      `,
+      [req.params.id]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({
+        error: "Content not found"
+      });
+    }
+
+    const content = contentResult.rows[0];
+
+    if (content.status === "published") {
+      return res.status(409).json({
+        error: "Content has already been published",
+        telegram_message_id: content.telegram_message_id
+      });
+    }
+
+    const message = `🤖 ${content.title}
+
+${content.body}
+
+📌 ${content.category}`;
+
+    const result = await telegram("sendMessage", {
+      chat_id: CHANNEL_USERNAME,
+      text: message,
+      disable_web_page_preview: false
+    });
+
+    const updated = await pool.query(
+      `
+      UPDATE content
+      SET
+        status = 'published',
+        telegram_message_id = $1,
+        published_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+      `,
+      [
+        result.result.message_id,
+        content.id
+      ]
+    );
+
+    res.json({
+      published: true,
+      content: updated.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      published: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Analytics
+// ─────────────────────────────────────────────
+
+app.post("/api/analytics", async (req, res) => {
+  try {
+    const {
+      content_id,
+      views = 0,
+      reactions = 0,
+      comments = 0,
+      clicks = 0,
+      performance_score = 0
+    } = req.body;
+
+    if (!content_id) {
+      return res.status(400).json({
+        error: "content_id is required"
+      });
+    }
+
+    const numericViews = Number(views) || 0;
+    const numericClicks = Number(clicks) || 0;
+
+    const ctr =
+      numericViews > 0
+        ? (numericClicks / numericViews) * 100
+        : 0;
+
+    const result = await pool.query(
+      `
+      INSERT INTO analytics (
+        content_id,
+        views,
+        reactions,
+        comments,
+        clicks,
+        ctr,
+        performance_score
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+      `,
+      [
+        content_id,
+        numericViews,
+        Number(reactions) || 0,
+        Number(comments) || 0,
+        numericClicks,
+        ctr,
+        Number(performance_score) || 0
+      ]
+    );
+
+    res.status(201).json({
+      saved: true,
+      analytics: result.rows[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      saved: false,
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Analytics for one content item
+// ─────────────────────────────────────────────
+
+app.get("/api/analytics/:contentId", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT *
+      FROM analytics
+      WHERE content_id = $1
+      ORDER BY recorded_at DESC
+      `,
+      [req.params.contentId]
+    );
+
+    res.json({
+      count: result.rows.length,
+      analytics: result.rows
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
 // Start server
 // ─────────────────────────────────────────────
 
 async function startServer() {
-  await initializeDatabase();
+  try {
+    await initializeDatabase();
 
-  app.listen(PORT, () => {
-    console.log(`AI Opportunity Hub running on port ${PORT}`);
-  });
+    app.listen(PORT, () => {
+      console.log(`AI Opportunity Hub running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Failed to start server:", error);
+    process.exit(1);
+  }
 }
 
 startServer();
