@@ -132,7 +132,6 @@ async function initializeDatabase() {
 Hook -> verified fact -> practical use -> source -> question.
 
 This starter pack is delivered digitally through AI Opportunity Hub after payment.',
-        50,
         1
       )
     `);
@@ -797,8 +796,7 @@ app.post("/api/content", async (req, res) => {
         title.trim(),
         body.trim(),
         category,
-        source,
-        source_url,
+        source,        source_url,
         Number(ai_score) || 0
       ]    );
 
@@ -1597,8 +1595,7 @@ app.get("/api/affiliate/content/:id/publish", async (req, res) => {
 
     await pool.query(
       `UPDATE content
-       SET status = 'published',
-           telegram_message_id = $1,
+       SET status = 'published',           telegram_message_id = $1,
            published_at = CURRENT_TIMESTAMP       WHERE id = $2`,
       [telegramMessageId, content.id]
     );
@@ -2397,8 +2394,7 @@ async function addAffiliateTrackingToPost(post, content) {
   const { rows } = await pool.query(
     `SELECT *
      FROM affiliate
-     WHERE active = 1
-       AND affiliate_url IS NOT NULL       AND affiliate_url <> ''
+     WHERE active = 1       AND affiliate_url IS NOT NULL       AND affiliate_url <> ''
      ORDER BY id ASC`
   );
 
