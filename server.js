@@ -1075,6 +1075,77 @@ app.get(
 );
 
 
+
+async function generateAffiliatePostWithAI(affiliate) {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not configured");
+  }
+
+  const product = affiliate.product || affiliate.company || "AI tool";
+  const company = affiliate.company || product;
+  const sourceUrl = affiliate.url || affiliate.affiliate_url || "";
+  const keywords = affiliate.keywords || "";
+
+  const prompt = `Create a factual Telegram partner recommendation for AI Opportunity Hub.
+
+Product: ${product}
+Company: ${company}
+Official site: ${sourceUrl}
+Known keywords/context: ${keywords}
+
+Rules:
+- Use only the information supplied above.
+- Do not invent features, pricing, plans, results, integrations, users, statistics, guarantees, or claims about what the product can do.
+- If the supplied information is limited, keep the post concise and describe it as a tool/service to explore rather than making unsupported claims.
+- Do not promise income, jobs, business results, or financial outcomes.
+- Make it useful rather than sounding like an advertisement.
+- Use 70-120 words.
+- Include a short "Why check it out?" section only when supported by the supplied information.
+- End with a short question inviting discussion.
+- Do NOT include any affiliate link or disclosure; the server will add those.
+- Return ONLY the finished Telegram post.
+`;
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://ai-opportunity-hub.onrender.com",
+      "X-Title": "AI Opportunity Hub"
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content: "Write concise, factual Telegram posts. Never invent facts. Return plain text only."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.2,
+      max_tokens: 350
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenRouter HTTP ${response.status}: ${errorText.slice(0, 300)}`);
+  }
+
+  const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content?.trim();
+
+  if (!raw) {
+    throw new Error("OpenRouter returned no affiliate post");
+  }
+
+  return cleanGeneratedPost(raw);
+}
+
 app.get("/api/affiliate/:id/content", async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -1087,16 +1158,7 @@ app.get("/api/affiliate/:id/content", async (req, res) => {
     }
 
     const affiliate = rows[0];
-    const title = `🤖 AI Automation Tool: ${affiliate.product || affiliate.company}`;
-    const body =
-      `🤖 ${affiliate.product || affiliate.company}
-
-Explore ${affiliate.product || affiliate.company} for AI automation and related workflows.
-
-This is a partner recommendation from AI Opportunity Hub. Check the service details and pricing on the official site before signing up.
-
-🔗 Try it: https://ai-opportunity-hub.onrender.com/go/affiliate/${affiliate.id}
-ℹ️ ${affiliate.disclosure || "Affiliate link"}`;
+    const title = `🤖 ${affiliate.product || affiliate.company}: AI Opportunity Hub Partner Pick`;
 
     const duplicate = await pool.query(
       `SELECT id, status FROM content
@@ -1113,6 +1175,7 @@ This is a partner recommendation from AI Opportunity Hub. Check the service deta
       });
     }
 
+    const aiPost = await generateAffiliatePostWithAI(affiliate);
     const result = await pool.query(
       `INSERT INTO content
        (title, body, category, source, source_url, ai_score, status)
@@ -1120,16 +1183,16 @@ This is a partner recommendation from AI Opportunity Hub. Check the service deta
        RETURNING *`,
       [
         title,
-        body,
+        aiPost,
         affiliate.company || affiliate.product || "Partner",
         affiliate.url || affiliate.affiliate_url || ""
       ]
     );
 
-    const trackedBody = body.trim().replace(
-      `/go/affiliate/${affiliate.id}`,
-      `/go/affiliate/${affiliate.id}?content_id=${result.rows[0].id}`
-    );
+    const trackedBody = `${aiPost.trim()}
+
+🔗 Check it out: https://ai-opportunity-hub.onrender.com/go/affiliate/${affiliate.id}?content_id=${result.rows[0].id}
+ℹ️ ${affiliate.disclosure || "Affiliate link"}`;
 
     const updated = await pool.query(
       "UPDATE content SET body = $1 WHERE id = $2 RETURNING *",
@@ -1165,18 +1228,11 @@ app.post("/api/affiliate/:id/content", async (req, res) => {
     const affiliate = rows[0];
     const title =
       req.body?.title ||
-      `🤖 AI Automation Tool: ${affiliate.product || affiliate.company}`;
+      `🤖 ${affiliate.product || affiliate.company}: AI Opportunity Hub Partner Pick`;
 
-    const body =
-      req.body?.body ||
-      `🤖 ${affiliate.product || affiliate.company}
-
-Explore ${affiliate.product || affiliate.company} for AI automation and related workflows.
-
-This is a partner recommendation from AI Opportunity Hub. Check the service details and pricing on the official site before signing up.
-
-🔗 Try it: https://ai-opportunity-hub.onrender.com/go/affiliate/${affiliate.id}
-ℹ️ ${affiliate.disclosure || "Affiliate link"}`;
+    const aiPost = req.body?.body
+      ? String(req.body.body).trim()
+      : await generateAffiliatePostWithAI(affiliate);
 
     const duplicate = await pool.query(
       `SELECT id, status
@@ -1201,15 +1257,25 @@ This is a partner recommendation from AI Opportunity Hub. Check the service deta
        RETURNING *`,
       [
         title.trim(),
-        body.trim(),
+        aiPost,
         affiliate.company || affiliate.product || "Partner",
         affiliate.url || affiliate.affiliate_url || ""
       ]
     );
 
+    const trackedBody = `${aiPost.trim()}
+
+🔗 Check it out: https://ai-opportunity-hub.onrender.com/go/affiliate/${affiliate.id}?content_id=${result.rows[0].id}
+ℹ️ ${affiliate.disclosure || "Affiliate link"}`;
+
+    const updated = await pool.query(
+      "UPDATE content SET body = $1 WHERE id = $2 RETURNING *",
+      [trackedBody, result.rows[0].id]
+    );
+
     res.status(201).json({
       created: true,
-      content: result.rows[0],
+      content: updated.rows[0],
       affiliate: {
         id: affiliate.id,
         product: affiliate.product,
