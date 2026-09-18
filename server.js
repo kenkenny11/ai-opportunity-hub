@@ -1,15 +1,87 @@
 import express from "express";
+import Database from "better-sqlite3";
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-
+// ─────────────────────────────────────────────
+// Environment variables
+// ─────────────────────────────────────────────
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TEST_CHAT_ID = process.env.TELEGRAM_TEST_CHAT_ID;
 const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
 
+// ─────────────────────────────────────────────
+// SQLite database
+// ─────────────────────────────────────────────
+const db = new Database("ai_opportunity_hub.db");
+
+db.pragma("journal_mode = WAL");
+
+// Content table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS content (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    body TEXT,
+    category TEXT,
+    source TEXT,
+    source_url TEXT,
+    ai_score INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'draft',
+    telegram_message_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    published_at DATETIME
+  )
+`);
+
+// Sources table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    url TEXT,
+    category TEXT,
+    active INTEGER DEFAULT 1,
+    reliability INTEGER DEFAULT 50,
+    last_checked DATETIME
+  )
+`);
+
+// Affiliate table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS affiliate (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product TEXT,
+    company TEXT,
+    url TEXT,
+    affiliate_url TEXT,
+    commission TEXT,
+    active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// Analytics table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_id INTEGER,
+    views INTEGER DEFAULT 0,
+    reactions INTEGER DEFAULT 0,
+    comments INTEGER DEFAULT 0,
+    clicks INTEGER DEFAULT 0,
+    ctr REAL DEFAULT 0,
+    performance_score REAL DEFAULT 0,
+    recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// ─────────────────────────────────────────────
+// Telegram helper
+// ─────────────────────────────────────────────
 async function telegram(method, body = {}) {
   if (!BOT_TOKEN) {
     throw new Error("TELEGRAM_BOT_TOKEN is not configured");
@@ -26,36 +98,40 @@ async function telegram(method, body = {}) {
     }
   );
 
-  return response.json();
+  return await response.json();
 }
+
+// ─────────────────────────────────────────────
+// Basic routes
+// ─────────────────────────────────────────────
 
 app.get("/", (req, res) => {
   res.json({
     service: "AI Opportunity Hub",
-    status: "online"
+    status: "online",
+    database: "SQLite"
   });
 });
 
 app.get("/health", (req, res) => {
   res.json({
-    status: "ok"
+    status: "ok",
+    service: "AI Opportunity Hub",
+    database: "connected"
   });
 });
+
+// ─────────────────────────────────────────────
+// Telegram connection test
+// ─────────────────────────────────────────────
 
 app.get("/telegram-test", async (req, res) => {
   try {
     const result = await telegram("getMe");
 
-    if (!result.ok) {
-      return res.status(500).json({
-        connected: false,
-        telegram: result
-      });
-    }
-
     res.json({
-      connected: true,
-      bot: result.result
+      connected: result.ok,
+      bot: result.result || null
     });
   } catch (error) {
     res.status(500).json({
@@ -65,32 +141,26 @@ app.get("/telegram-test", async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────
+// Private Telegram test
+// ─────────────────────────────────────────────
+
 app.get("/send-test", async (req, res) => {
   try {
     if (!TEST_CHAT_ID) {
       return res.status(500).json({
-        sent: false,
         error: "TELEGRAM_TEST_CHAT_ID is not configured"
       });
     }
 
     const result = await telegram("sendMessage", {
       chat_id: TEST_CHAT_ID,
-      text:
-        "🤖 AI Opportunity Hub is connected!\n\n" +
-        "Telegram → Render → Bot API is working."
+      text: "🤖 AI Opportunity Hub database backend is connected."
     });
 
-    if (!result.ok) {
-      return res.status(500).json({
-        sent: false,
-        telegram: result
-      });
-    }
-
     res.json({
-      sent: true,
-      message_id: result.result.message_id
+      sent: result.ok,
+      message_id: result.result?.message_id || null
     });
   } catch (error) {
     res.status(500).json({
@@ -100,38 +170,26 @@ app.get("/send-test", async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────
+// Channel publishing test
+// ─────────────────────────────────────────────
+
 app.get("/publish-test", async (req, res) => {
   try {
     if (!CHANNEL_USERNAME) {
       return res.status(500).json({
-        published: false,
         error: "TELEGRAM_CHANNEL_USERNAME is not configured"
       });
     }
 
     const result = await telegram("sendMessage", {
       chat_id: CHANNEL_USERNAME,
-      text:
-        "🚀 AI Opportunity Hub\n\n" +
-        "This is our first automated channel post.\n\n" +
-        "The Telegram publishing system is working. More AI tools, jobs, resources and opportunities are coming soon.\n\n" +
-        "What would you like to see most?\n\n" +
-        "🤖 AI Tools\n" +
-        "💼 AI Jobs\n" +
-        "📱 AI Apps\n" +
-        "💰 Digital Opportunities"
+      text: "🚀 AI Opportunity Hub\n\nSQLite database is connected successfully."
     });
 
-    if (!result.ok) {
-      return res.status(500).json({
-        published: false,
-        telegram: result
-      });
-    }
-
     res.json({
-      published: true,
-      message_id: result.result.message_id,
+      published: result.ok,
+      message_id: result.result?.message_id || null,
       channel: CHANNEL_USERNAME
     });
   } catch (error) {
@@ -141,6 +199,37 @@ app.get("/publish-test", async (req, res) => {
     });
   }
 });
+
+// ─────────────────────────────────────────────
+// Database status
+// ─────────────────────────────────────────────
+
+app.get("/database-test", (req, res) => {
+  try {
+    const tables = db
+      .prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+        ORDER BY name
+      `)
+      .all();
+
+    res.json({
+      database: "connected",
+      tables
+    });
+  } catch (error) {
+    res.status(500).json({
+      database: "error",
+      error: error.message
+    });
+  }
+});
+
+// ─────────────────────────────────────────────
+// Start server
+// ─────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`AI Opportunity Hub running on port ${PORT}`);
