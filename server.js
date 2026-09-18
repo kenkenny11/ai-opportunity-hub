@@ -158,7 +158,6 @@ async function initializeDatabase() {
     WHERE NOT EXISTS (
       SELECT 1 FROM affiliate WHERE LOWER(company) = 'vidpal'
     )`
-  )`
   );
 
   console.log("Database initialized");
