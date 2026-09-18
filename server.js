@@ -1718,6 +1718,59 @@ app.post("/api/analytics", async (req, res) => {
   }
 });
 
+app.get("/api/dashboard", async (req, res) => {
+  try {
+    const totals = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total_content,
+        COUNT(*) FILTER (WHERE status = 'published')::int AS published,
+        COUNT(*) FILTER (WHERE status = 'draft')::int AS drafts,
+        COUNT(*) FILTER (WHERE ai_score >= 75)::int AS approved
+      FROM content
+    `);
+
+    const categories = await pool.query(`
+      SELECT category, COUNT(*)::int AS count
+      FROM content
+      GROUP BY category
+      ORDER BY count DESC
+    `);
+
+    const sources = await pool.query(`
+      SELECT
+        s.name,
+        s.category,
+        s.active,
+        s.last_checked,
+        COUNT(c.id)::int AS content_count
+      FROM sources s
+      LEFT JOIN content c ON c.source = s.name
+      GROUP BY s.id, s.name, s.category, s.active, s.last_checked
+      ORDER BY s.active DESC, content_count DESC
+    `);
+
+    const recent = await pool.query(`
+      SELECT id, title, category, ai_score, status, source, created_at, published_at
+      FROM content
+      ORDER BY id DESC
+      LIMIT 20
+    `);
+
+    res.json({
+      dashboard: true,
+      totals: totals.rows[0],
+      categories: categories.rows,
+      sources: sources.rows,
+      recent: recent.rows
+    });
+  } catch (error) {
+    res.status(500).json({
+      dashboard: false,
+      error: error.message
+    });
+  }
+});
+
 app.get(
   "/api/analytics/:contentId",
   async (req, res) => {
