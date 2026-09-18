@@ -2963,6 +2963,55 @@ async function handleTelegramUpdate(update) {
           [productId]
         );
         if (rows.length) await sendPremiumInvoice(query.from.id, rows[0]);
+        return;
+      }
+
+      if (data.startsWith("menu:")) {
+        const command = data.split(":")[1];
+        const categories = { tools: "AI Tools", jobs: "AI Jobs", free: "Free Resources", learn: "AI Tutorials" };
+        const labels = { tools: "🤖 AI Tools", jobs: "💼 AI Jobs", free: "🎁 Free AI Resources", learn: "🧠 Learn AI" };
+        const chatId = query.message?.chat?.id || query.from.id;
+
+        if (command === "premium") {
+          const { rows } = await pool.query(
+            "SELECT id, title, description, price_stars FROM premium_products WHERE active = 1 ORDER BY id ASC"
+          );
+          const lines = ["⭐ *AI Opportunity Hub Premium*"];
+          const keyboard = [];
+          for (const product of rows) {
+            lines.push(`#${product.id} *${product.title}* — ${product.price_stars} Stars\n${product.description}`);
+            keyboard.push([{ text: `⭐ Buy #${product.id} — ${product.price_stars} Stars`, callback_data: `buy:${product.id}` }]);
+          }
+          await telegram("sendMessage", {
+            chat_id: chatId,
+            text: lines.join("\n\n"),
+            parse_mode: "Markdown",
+            reply_markup: { inline_keyboard: keyboard }
+          });
+        } else if (categories[command]) {
+          const { rows } = await pool.query(
+            `SELECT title, body, source_url
+             FROM content
+             WHERE status = 'published' AND category = $1
+             ORDER BY published_at DESC NULLS LAST, id DESC
+             LIMIT 8`,
+            [categories[command]]
+          );
+          const lines = [labels[command]];
+          if (!rows.length) {
+            lines.push("\nNo published items are available in this category yet. Check back soon.");
+          } else {
+            for (const item of rows) {
+              lines.push(`\n• *${item.title}*\n${String(item.body || "").slice(0, 500)}${item.source_url ? `\n🔗 ${item.source_url}` : ""}`);
+            }
+          }
+          await telegram("sendMessage", {
+            chat_id: chatId,
+            text: lines.join("\n"),
+            parse_mode: "Markdown",
+            disable_web_page_preview: false
+          });
+        }
       }
       return;
     }
@@ -2986,7 +3035,53 @@ async function handleTelegramUpdate(update) {
     }
     const textMessage = message?.text || "";
     if (!message?.chat?.id) return;
-    if (textMessage === "/premium") {
+    if (textMessage === "/start" || textMessage === "/help") {
+      await telegram("sendMessage", {
+        chat_id: message.chat.id,
+        text: "🤖 AI Opportunity Hub\n\nChoose an option below:",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "🤖 AI Tools", callback_data: "menu:tools" },
+              { text: "💼 AI Jobs", callback_data: "menu:jobs" }
+            ],
+            [
+              { text: "🎁 Free Resources", callback_data: "menu:free" },
+              { text: "🧠 Learn AI", callback_data: "menu:learn" }
+            ],
+            [
+              { text: "⭐ Premium", callback_data: "menu:premium" }
+            ]
+          ]
+        }
+      });
+    } else if (["/tools", "/jobs", "/free", "/learn"].includes(textMessage)) {
+      const command = textMessage.slice(1);
+      const labels = { tools: "🤖 AI Tools", jobs: "💼 AI Jobs", free: "🎁 Free AI Resources", learn: "🧠 Learn AI" };
+      const categories = { tools: "AI Tools", jobs: "AI Jobs", free: "Free Resources", learn: "AI Tutorials" };
+      const { rows } = await pool.query(
+        `SELECT title, body, source_url
+         FROM content
+         WHERE status = 'published' AND category = $1
+         ORDER BY published_at DESC NULLS LAST, id DESC
+         LIMIT 8`,
+        [categories[command]]
+      );
+      const lines = [labels[command]];
+      if (!rows.length) {
+        lines.push("\nNo published items are available in this category yet. Check back soon.");
+      } else {
+        for (const item of rows) {
+          lines.push(`\n• *${item.title}*\n${String(item.body || "").slice(0, 500)}${item.source_url ? `\n🔗 ${item.source_url}` : ""}`);
+        }
+      }
+      await telegram("sendMessage", {
+        chat_id: message.chat.id,
+        text: lines.join("\n"),
+        parse_mode: "Markdown",
+        disable_web_page_preview: false
+      });
+    } else if (textMessage === "/premium") {
       const { rows } = await pool.query(
         "SELECT id, title, description, price_stars FROM premium_products WHERE active = 1 ORDER BY id ASC"
       );
@@ -3001,11 +3096,6 @@ async function handleTelegramUpdate(update) {
         text: lines.join("\n\n"),
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: keyboard }
-      });
-    } else if (textMessage === "/start" || textMessage === "/help") {
-      await telegram("sendMessage", {
-        chat_id: message.chat.id,
-        text: "🤖 AI Opportunity Hub\n\nUse /tools, /jobs, /free, /learn and /premium."
       });
     }
   } catch (error) {
