@@ -1927,6 +1927,7 @@ app.get("/api/ai/generate-drafts", async (req, res) => {
       `SELECT * FROM content
        WHERE status = 'draft'
          AND ai_score >= 75
+         AND category <> 'Digital Opportunities'
        ORDER BY ai_score DESC, id DESC
        LIMIT $1`,
       [limit]
