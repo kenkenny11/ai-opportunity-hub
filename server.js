@@ -1089,6 +1089,217 @@ Set publishable=true only when score >= 75. Do not invent facts.`;
   };
 }
 
+
+
+function cleanGeneratedPost(text) {
+  return String(text || "")
+    .replace(/^\s*\`\`\`(?:markdown|text)?\s*/i, "")
+    .replace(/\s*\`\`\`\s*$/i, "")
+    .trim();
+}
+
+async function generateContentWithAI(content) {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not configured");
+  }
+
+  const prompt = `Create a Telegram post for AI Opportunity Hub from this verified source item.
+
+Title: ${content.title}
+Source: ${content.source}
+URL: ${content.source_url || ""}
+Category: ${content.category}
+
+Rules:
+- Use only information supported by the title, source and URL.
+- Do not invent features, numbers, dates, prices, claims or quotes.
+- Make it useful to a general audience interested in AI tools, jobs, digital opportunities, apps, tutorials, news and free resources.
+- Keep it concise: about 100-180 words.
+- Start with a strong, clear headline.
+- Explain what happened and why it matters.
+- Include a practical takeaway when supported by the source.
+- End with a short engagement question.
+- Include the source link on its own line.
+- Do not use markdown tables.
+- Return ONLY the finished Telegram post, with no explanation before or after it.`;
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://ai-opportunity-hub.onrender.com",
+      "X-Title": "AI Opportunity Hub"
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You write concise, factual Telegram posts. Never invent facts."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.2,
+      max_tokens: 500
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenRouter HTTP ${response.status}: ${errorText.slice(0, 300)}`);
+  }
+
+  const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content;
+
+  if (!raw) {
+    throw new Error("OpenRouter returned no generated content");
+  }
+
+  return cleanGeneratedPost(raw);
+}
+
+app.get("/api/ai/generate/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM content WHERE id = $1 LIMIT 1",
+      [req.params.id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Content not found" });
+    }
+
+    const content = rows[0];
+
+    if (Number(content.ai_score) < 75) {
+      return res.status(400).json({
+        generated: false,
+        error: "Content is below the publishable AI score threshold of 75",
+        score: Number(content.ai_score)
+      });
+    }
+
+    const generatedPost = await generateContentWithAI(content);
+
+    await pool.query(
+      "UPDATE content SET body = $1 WHERE id = $2",
+      [generatedPost, req.params.id]
+    );
+
+    res.json({
+      generated: true,
+      id: content.id,
+      title: content.title,
+      score: Number(content.ai_score),
+      category: content.category,
+      body: generatedPost
+    });
+  } catch (error) {
+    console.error("AI generation error:", error);
+    res.status(500).json({ generated: false, error: error.message });
+  }
+});
+
+app.post("/api/ai/generate/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM content WHERE id = $1 LIMIT 1",
+      [req.params.id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Content not found" });
+    }
+
+    const content = rows[0];
+
+    if (Number(content.ai_score) < 75) {
+      return res.status(400).json({
+        generated: false,
+        error: "Content is below the publishable AI score threshold of 75",
+        score: Number(content.ai_score)
+      });
+    }
+
+    const generatedPost = await generateContentWithAI(content);
+
+    await pool.query(
+      "UPDATE content SET body = $1 WHERE id = $2",
+      [generatedPost, req.params.id]
+    );
+
+    res.json({
+      generated: true,
+      id: content.id,
+      title: content.title,
+      score: Number(content.ai_score),
+      category: content.category,
+      body: generatedPost
+    });
+  } catch (error) {
+    console.error("AI generation error:", error);
+    res.status(500).json({ generated: false, error: error.message });
+  }
+});
+
+app.get("/api/ai/generate-drafts", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 10, 25);
+
+    const { rows } = await pool.query(
+      `SELECT * FROM content
+       WHERE status = 'draft'
+         AND ai_score >= 75
+       ORDER BY ai_score DESC, id DESC
+       LIMIT $1`,
+      [limit]
+    );
+
+    const results = [];
+
+    for (const item of rows) {
+      try {
+        const generatedPost = await generateContentWithAI(item);
+
+        await pool.query(
+          "UPDATE content SET body = $1 WHERE id = $2",
+          [generatedPost, item.id]
+        );
+
+        results.push({
+          id: item.id,
+          title: item.title,
+          score: Number(item.ai_score),
+          category: item.category,
+          generated: true,
+          body: generatedPost
+        });
+      } catch (error) {
+        results.push({
+          id: item.id,
+          title: item.title,
+          generated: false,
+          error: error.message
+        });
+      }
+    }
+
+    res.json({
+      generated: true,
+      count: results.length,
+      results
+    });
+  } catch (error) {
+    console.error("Draft generation error:", error);
+    res.status(500).json({ generated: false, error: error.message });
+  }
+});
+
 app.get("/api/ai/score/:id", async (req, res) => {
   try {
     const { rows } = await pool.query(
