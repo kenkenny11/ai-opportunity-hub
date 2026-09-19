@@ -3508,7 +3508,7 @@ async function createFallbackHubContent() {
     `SELECT id,name,category,description,pricing,free_tier,url
      FROM ai_tools
      WHERE active=1
-     ORDER BY last_checked DESC NULLS LAST,id DESC
+     ORDER BY verified_at DESC NULLS LAST,id DESC
      LIMIT 12`
   );
 
@@ -3754,7 +3754,5 @@ async function startServer() {
     process.exit(1);
   }
 }
-
-startServer();
 
 startServer();
