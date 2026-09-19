@@ -3495,56 +3495,60 @@ app.get("/api/system/status", async (req, res) => {
 });
 
 async function createFallbackHubContent() {
-  // If external collectors return nothing, keep the channel useful using
-  // verified records already stored in the Hub. This never invents a URL.
+  // Keep the channel publishing even when every external source is a duplicate.
+  // Rotate through verified tools and avoid reposting the same tool within 24 hours.
   const recent = await pool.query(
-    `SELECT title FROM content
+    `SELECT source_url
+     FROM content
      WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '24 hours'
-     ORDER BY id DESC LIMIT 30`
+       AND source_url IS NOT NULL
+       AND source_url <> ''
+     ORDER BY id DESC LIMIT 100`
   );
-  const used = new Set(recent.rows.map(r => String(r.title).toLowerCase()));
+  const recentlyUsedUrls = new Set(recent.rows.map(r => String(r.source_url)));
 
   const tools = await pool.query(
     `SELECT id,name,category,description,pricing,free_tier,url
      FROM ai_tools
      WHERE active=1
      ORDER BY verified_at DESC NULLS LAST,id DESC
-     LIMIT 12`
+     LIMIT 30`
   );
 
   let created = 0;
   for (const tool of tools.rows) {
     if (created >= 2) break;
-    const title = `${tool.name}: useful AI tool`;
-    if (used.has(title.toLowerCase())) continue;
+    if (!tool.url || recentlyUsedUrls.has(String(tool.url))) continue;
 
+    const title = `🤖 AI Tool Pick: ${tool.name}`;
     let body =
       `🤖 ${tool.name}\\n\\n` +
       `${tool.description}\\n\\n` +
       `💳 Pricing: ${tool.pricing || "Check the official website"}\\n` +
       `🆓 Free access: ${tool.free_tier || "Check the official website"}\\n\\n` +
       `🔗 Official website: ${tool.url}\\n\\n` +
-      `Would you use this tool?`;
+      `Would you use ${tool.name} for your work or content?\\n\\n` +
+      `#AITools #AI`;
 
     const tempContent = {
       id: null,
       title,
-      category: "AI Tools",
+      category: tool.category || "AI Tools",
       source: "AI Opportunity Hub Tool Directory",
       source_url: tool.url
     };
 
     const inserted = await pool.query(
       `INSERT INTO content(title,body,category,source,source_url,ai_score,status)
-       VALUES($1,$2,'AI Tools',$3,$4,80,'draft')
+       VALUES($1,$2,$3,$4,$5,80,'draft')
        RETURNING id`,
-      [title,body,tempContent.source,tool.url]
+      [title,body,tempContent.category,tempContent.source,tool.url]
     );
 
     tempContent.id = inserted.rows[0].id;
     body = await addAffiliateTrackingToPost(body, tempContent);
     await pool.query("UPDATE content SET body=$1 WHERE id=$2",[body,tempContent.id]);
-    used.add(title.toLowerCase());
+    recentlyUsedUrls.add(String(tool.url));
     created++;
   }
 
