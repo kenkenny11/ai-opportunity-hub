@@ -3537,13 +3537,17 @@ async function createFallbackHubContent() {
       source: "AI Opportunity Hub Tool Directory",
       source_url: tool.url
     };
-    body = await addAffiliateTrackingToPost(body, tempContent);
 
-    await pool.query(
+    const inserted = await pool.query(
       `INSERT INTO content(title,body,category,source,source_url,ai_score,status)
-       VALUES($1,$2,'AI Tools',$3,$4,80,'draft')`,
+       VALUES($1,$2,'AI Tools',$3,$4,80,'draft')
+       RETURNING id`,
       [title,body,tempContent.source,tool.url]
     );
+
+    tempContent.id = inserted.rows[0].id;
+    body = await addAffiliateTrackingToPost(body, tempContent);
+    await pool.query("UPDATE content SET body=$1 WHERE id=$2",[body,tempContent.id]);
     used.add(title.toLowerCase());
     created++;
   }
