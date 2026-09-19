@@ -131,14 +131,57 @@ export function registerHubV2(app,{pool,telegram}){
   }
 
   function format(title,items){
-    if(!items.length)return "<b>"+esc(title)+"</b>\\n\\nNo matching items yet. Send me a more specific request.";
+    if(!items.length)return "<b>"+esc(title)+"</b>\\n\\nNo matching items yet. Send a more specific request.";
+
     const lines=["<b>"+esc(title)+"</b>"];
     for(const x of items.slice(0,8)){
-      const n=x.name||x.title||"Item",u=x.url||x.apply_url||x.source_url,d=x.description||x.content||x.body||"";
-      lines.push("\\n<b>• "+esc(n)+"</b>"+(x.company?"\\n🏢 "+esc(x.company):"")+(x.category?"\\n🏷️ "+esc(x.category):"")+(x.location?"\\n📍 "+esc(x.location):"")+"\\n"+esc(String(d).slice(0,450))+(u?"\\n🔗 <a href=\""+esc(u)+"\">Open</a>":""));
+      const name=x.name||x.title||"Item";
+      const url=x.url||x.apply_url||x.source_url;
+      const category=x.category||x.type||"";
+      const description=String(x.description||x.content||x.body||"")
+        .replace(/<[^>]*>/g,"")
+        .replace(/\\s+/g," ")
+        .trim();
+
+      const cleanDescription=description.length>360
+        ? description.slice(0,357).trimEnd()+"..."
+        : description;
+
+      const pricing=x.pricing||"";
+      const free=x.free_tier||"";
+      const location=x.location||"";
+      const company=x.company||"";
+      const action=x.apply_url?"Apply":(x.url||x.source_url?"Open":"");
+
+      lines.push(
+        "",
+        "• <b>"+esc(name)+"</b>",
+        category?"🏷️ "+esc(category):"",
+        company?"🏢 "+esc(company):"",
+        location?"📍 "+esc(location):"",
+        "🤖 <b>"+esc(name)+"</b>",
+        "",
+        cleanDescription?esc(cleanDescription):"No description available.",
+        "",
+        pricing?"💳 Pricing: "+esc(pricing):"",
+        free?"🆓 Free access: "+esc(free):"",
+        "",
+        url?"🔗 Official website: <a href=\""+esc(url)+"\">"+esc(url)+"</a>":"",
+        "",
+        action?"🔗 <a href=\""+esc(url)+"\">"+action+"</a>":"",
+        ""
+      );
     }
-    const out=lines.join("\\n");
-    return out.length>3900?out.slice(0,3880)+"\\n\\n…More items are available in Open AI Hub.":out;
+
+    const cleaned=lines.filter((line,i)=>line!=="" || (i>0 && lines[i-1]!=="")).join("\\n");
+    const footer=/tools|android/i.test(title)
+      ? "\\nWould you use this tool?"
+      : "";
+
+    const out=cleaned+footer;
+    return out.length>3900
+      ? out.slice(0,3860)+"\\n\\n…Open AI Hub for more."
+      : out;
   }
 
   async function askFreeAI(question, payload){
