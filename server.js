@@ -1138,11 +1138,7 @@ app.post(
         });
       }
 
-      const telegramResult = await telegram("sendMessage", {
-        chat_id: CHANNEL_USERNAME,
-        text: content.body,
-        disable_web_page_preview: false
-      });
+      const telegramResult = await publishTelegramContent(content);
 
       const updated = await pool.query(
         `UPDATE content
@@ -1207,11 +1203,7 @@ app.get("/api/ai/publish/:id", async (req, res) => {
       });
     }
 
-    const telegramResult = await telegram("sendMessage", {
-      chat_id: CHANNEL_USERNAME,
-      text: content.body,
-      disable_web_page_preview: false
-    });
+    const telegramResult = await publishTelegramContent(content);
 
     const updated = await pool.query(
       `UPDATE content
@@ -1711,11 +1703,7 @@ app.get("/api/affiliate/content/:id/publish", async (req, res) => {
       });
     }
 
-    const telegramResult = await telegram("sendMessage", {
-      chat_id: CHANNEL_USERNAME,
-      text: content.body,
-      disable_web_page_preview: false
-    });
+    const telegramResult = await publishTelegramContent(content);
 
     if (!telegramResult?.ok || !telegramResult?.result?.message_id) {
       throw new Error(telegramResult?.description || "Telegram publish failed");
@@ -3725,11 +3713,7 @@ async function runAutomationCycle() {
     let published = 0;
     for (const content of publishResult.rows) {
       try {
-        const telegramResult = await telegram("sendMessage", {
-          chat_id: CHANNEL_USERNAME,
-          text: content.body,
-          disable_web_page_preview: false
-        });
+        const telegramResult = await publishTelegramContent(content);
 
         await pool.query(
           `UPDATE content
