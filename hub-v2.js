@@ -228,7 +228,7 @@ export function registerHubV2(app,{pool,telegram}){
       if(user?.id){
         await pool.query("INSERT INTO hub_users(telegram_id,username,first_name,language_code) VALUES($1,$2,$3,$4) ON CONFLICT(telegram_id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name,language_code=EXCLUDED.language_code,last_active=CURRENT_TIMESTAMP",[user.id,user.username||"",user.first_name||"",user.language_code||""]);
       }
-      const data=String(c?.data||""),text=String(m?.text||"").trim(),cmd=text.split(/\\s+/)[0].toLowerCase();
+      const data=String(c?.data||""),text=String(m?.text||"").trim(),cmd=(text.split(/\\s+/)[0]||"").toLowerCase().replace(/@[^\\s]+$/,"");
       const send=x=>telegram("sendMessage",{chat_id:id,...x});
 
       if(c){
