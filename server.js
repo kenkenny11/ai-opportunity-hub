@@ -205,6 +205,23 @@ This starter pack is delivered digitally through AI Opportunity Hub after paymen
     ADD COLUMN IF NOT EXISTS disclosure TEXT DEFAULT 'Affiliate link'
   `);
 
+  const stableSources = [
+    { name: "Anthropic Newsroom", url: "https://www.anthropic.com/news", category: "AI News", reliability: 95 },
+    { name: "Google AI", url: "https://blog.google/innovation-and-ai/technology/ai/", category: "AI News", reliability: 95 },
+    { name: "Hugging Face Blog", url: "https://huggingface.co/blog", category: "AI News", reliability: 90 },
+    { name: "GitHub AI & ML", url: "https://github.blog/ai-and-ml/", category: "AI Tools", reliability: 90 },
+    { name: "Microsoft AI Blog", url: "https://blogs.microsoft.com/blog/", category: "AI News", reliability: 90 }
+  ];
+
+  for (const source of stableSources) {
+    await pool.query(
+      `INSERT INTO sources (name, url, category, active, reliability)
+       SELECT $1, $2, $3, 1, $4
+       WHERE NOT EXISTS (SELECT 1 FROM sources WHERE LOWER(name)=LOWER($1))`,
+      [source.name, source.url, source.category, source.reliability]
+    );
+  }
+
   const additionalSources = [
     {
       name: "Product Hunt",
@@ -2444,7 +2461,7 @@ async function addAffiliateTrackingToPost(post, content) {
   const { rows } = await pool.query(
     `SELECT *
      FROM affiliate
-     WHERE active = 1       AND affiliate_url IS NOT NULL       AND affiliate_url <> ''
+     WHERE a.active = 1       AND a.affiliate_url IS NOT NULL       AND a.affiliate_url <> ''
      ORDER BY id ASC`
   );
 
@@ -3065,7 +3082,7 @@ async function sendTelegramToolsMenu(chatId) {
 
 async function sendTelegramTools(chatId, category = null) {
   const params = [];
-  let where = "WHERE active = 1";
+  let where = "WHERE t.active = 1";
   if (category) {
     params.push(category);
     where += " AND category = $1";
@@ -3481,6 +3498,59 @@ app.get("/api/system/status", async (req, res) => {
   } catch (error) { res.status(500).json({status:"error",error:error.message}); }
 });
 
+async function createFallbackHubContent() {
+  // If external collectors return nothing, keep the channel useful using
+  // verified records already stored in the Hub. This never invents a URL.
+  const recent = await pool.query(
+    `SELECT title FROM content
+     WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '24 hours'
+     ORDER BY id DESC LIMIT 30`
+  );
+  const used = new Set(recent.rows.map(r => String(r.title).toLowerCase()));
+
+  const tools = await pool.query(
+    `SELECT id,name,category,description,pricing,free_tier,url
+     FROM ai_tools
+     WHERE active=1
+     ORDER BY last_checked DESC NULLS LAST,id DESC
+     LIMIT 12`
+  );
+
+  let created = 0;
+  for (const tool of tools.rows) {
+    if (created >= 2) break;
+    const title = `${tool.name}: useful AI tool`;
+    if (used.has(title.toLowerCase())) continue;
+
+    let body =
+      `🤖 ${tool.name}\\n\\n` +
+      `${tool.description}\\n\\n` +
+      `💳 Pricing: ${tool.pricing || "Check the official website"}\\n` +
+      `🆓 Free access: ${tool.free_tier || "Check the official website"}\\n\\n` +
+      `🔗 Official website: ${tool.url}\\n\\n` +
+      `Would you use this tool?`;
+
+    const tempContent = {
+      id: null,
+      title,
+      category: "AI Tools",
+      source: "AI Opportunity Hub Tool Directory",
+      source_url: tool.url
+    };
+    body = await addAffiliateTrackingToPost(body, tempContent);
+
+    await pool.query(
+      `INSERT INTO content(title,body,category,source,source_url,ai_score,status)
+       VALUES($1,$2,'AI Tools',$3,$4,80,'draft')`,
+      [title,body,tempContent.source,tool.url]
+    );
+    used.add(title.toLowerCase());
+    created++;
+  }
+
+  return created;
+}
+
 async function runAutomationCycle() {
   console.log("Starting automation cycle...");
 
@@ -3490,6 +3560,16 @@ async function runAutomationCycle() {
     );
     const collectResult = await collectResponse.json();
     console.log("Collector:", collectResult.total_saved ?? collectResult.error);
+
+    let fallbackCreated = 0;
+    if (!Number(collectResult.total_saved || 0)) {
+      try {
+        fallbackCreated = await createFallbackHubContent();
+        console.log("Fallback content created:", fallbackCreated);
+      } catch (error) {
+        console.error("Fallback content failed:", error.message);
+      }
+    }
 
     const affiliateAutomation = await generateAffiliatePartnerDrafts(3);
     console.log("Affiliate automation:", affiliateAutomation);
@@ -3610,6 +3690,7 @@ async function runAutomationCycle() {
 
     return {
       collected: collectResult,
+      fallback_created: fallbackCreated,
       affiliate_automation: affiliateAutomation,
       scored,
       generated,
