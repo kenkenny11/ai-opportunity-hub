@@ -94,7 +94,20 @@ export function registerHubV2(app,{pool,telegram}){
   }
 
   async function get(type,q){
-    if(type==="tools")return {title:"🤖 AI Tools",type:"tools",items:(await search("ai_tools",["name","category","description","platform","use_cases","pricing","free_tier"],q,16)).rows};
+    if(type==="tools"){
+      let r=await search("ai_tools",["name","category","description","platform","use_cases","pricing","free_tier"],q,16);
+      if(!r.rows.length){
+        // Fallback 1: published AI Tools content, so Telegram never reports an empty service
+        const fallback=await pool.query(
+          `SELECT id,title,body AS description,category,source_url,source
+           FROM content
+           WHERE status='published' AND category ILIKE '%AI Tools%'
+           ORDER BY published_at DESC NULLS LAST,id DESC LIMIT 8`
+        );
+        if(fallback.rows.length) return {title:"🤖 AI Tools",type:"tools",items:fallback.rows};
+      }
+      return {title:"🤖 AI Tools",type:"tools",items:r.rows};
+    }
     if(type==="jobs"){
       const r=await search("ai_jobs",["company","title","location","category","description"],q,12);
       if(r.rows.length) return {title:"💼 AI Jobs",type:"jobs",items:r.rows};
@@ -203,7 +216,9 @@ export function registerHubV2(app,{pool,telegram}){
     const p=await get(type,q);
     if(type==="tools"&&/android/.test(l))p.items=p.items.filter(x=>/android/i.test(x.platform||"")||/android/i.test(x.description||""));
     if(type==="tools"&&/free|no cost|gratis/.test(l))p.items=p.items.filter(x=>/free/i.test((x.pricing||"")+" "+(x.free_tier||"")));
-    const ai=await askFreeAI(q,{category:p.title,items:p.items});
+    // Do not send an empty dataset to the AI model. Use the deterministic Hub formatter instead.
+    // This prevents the assistant from replying that there are no supplied items when the database has no match.
+    const ai=p.items.length ? await askFreeAI(q,{category:p.title,items:p.items}) : null;
     const out=ai||format(p.title,p.items);
     return out.length>3900?out.slice(0,3880)+"\\n\\n…Open AI Hub for more.":out;
   }
