@@ -194,6 +194,37 @@ export function registerHubV2(app,{pool,telegram}){
           await send({text:"🤖 <b>AI Opportunity Hub</b>\\n\\nTell me what you need, or choose a service.",parse_mode:"HTML",reply_markup:menu});
           return res.sendStatus(200);
         }
+
+        // Handle buttons from older bot messages too, so no stale menu is left broken.
+        const legacy = {
+          "menu:tools":"tools",
+          "menu:jobs":"jobs",
+          "menu:free":"resources",
+          "menu:learn":"tutorials",
+          "menu:opportunities":"opportunities",
+          "menu:android":"android",
+          "menu:trending":"trending"
+        };
+        if(legacy[data]){
+          await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Loading"});
+          if(data==="menu:android"){
+            const r=await pool.query("SELECT * FROM ai_tools WHERE active=1 AND status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
+            await send({text:format("📱 Android AI",r.rows),parse_mode:"HTML",reply_markup:menu});
+            return res.sendStatus(200);
+          }
+          if(data==="menu:opportunities"){
+            let r=await get("opportunities","");
+            if(!r.items.length){
+              const fallback=await pool.query("SELECT id,title,body AS description,category,source_url FROM content WHERE status='published' AND category ILIKE '%Opportunity%' ORDER BY published_at DESC NULLS LAST,id DESC LIMIT 8");
+              r={title:"💰 Make Money",items:fallback.rows};
+            }
+            await send({text:format(r.title,r.items),parse_mode:"HTML",reply_markup:menu});
+            return res.sendStatus(200);
+          }
+          const r=await get(legacy[data],"");
+          await send({text:format(r.title,r.items),parse_mode:"HTML",reply_markup:menu});
+          return res.sendStatus(200);
+        }
         return next();
       }
 
