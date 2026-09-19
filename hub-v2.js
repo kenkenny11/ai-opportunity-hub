@@ -117,7 +117,8 @@ export function registerHubV2(app,{pool,telegram}){
       const n=x.name||x.title||"Item",u=x.url||x.apply_url||x.source_url,d=x.description||x.content||x.body||"";
       lines.push("\\n<b>• "+esc(n)+"</b>"+(x.company?"\\n🏢 "+esc(x.company):"")+(x.category?"\\n🏷️ "+esc(x.category):"")+(x.location?"\\n📍 "+esc(x.location):"")+"\\n"+esc(String(d).slice(0,450))+(u?"\\n🔗 <a href=\""+esc(u)+"\">Open</a>":""));
     }
-    return lines.join("\\n");
+    const out=lines.join("\\n");
+    return out.length>3900?out.slice(0,3880)+"\\n\\n…More items are available in Open AI Hub.":out;
   }
 
   async function askFreeAI(question, payload){
@@ -140,7 +141,8 @@ export function registerHubV2(app,{pool,telegram}){
     if(type==="tools"&&/android/.test(l))p.items=p.items.filter(x=>/android/i.test(x.platform||"")||/android/i.test(x.description||""));
     if(type==="tools"&&/free|no cost|gratis/.test(l))p.items=p.items.filter(x=>/free/i.test((x.pricing||"")+" "+(x.free_tier||"")));
     const ai=await askFreeAI(q,{category:p.title,items:p.items});
-    return ai||format(p.title,p.items);
+    const out=ai||format(p.title,p.items);
+    return out.length>3900?out.slice(0,3880)+"\\n\\n…Open AI Hub for more.":out;
   }
 
   const menu={
@@ -149,7 +151,7 @@ export function registerHubV2(app,{pool,telegram}){
       [{text:"💰 Make Money",callback_data:"hub:opportunities"},{text:"📱 Android AI",callback_data:"hub:android"}],
       [{text:"🆓 Free Stuff",callback_data:"hub:resources"},{text:"🎓 Learn AI",callback_data:"hub:tutorials"}],
       [{text:"🔥 Trending",callback_data:"hub:trending"},{text:"🔎 Ask AI",callback_data:"hub:ask"}],
-      [{text:"🚀 Open AI Hub",web_app:{url:(process.env.PUBLIC_BASE_URL||"https://ai-opportunity-hub.onrender.com")+"/miniapp"}},{text:"⭐ Premium",callback_data:"menu:premium"}]
+      [{text:"🚀 Open AI Hub",url:(process.env.PUBLIC_BASE_URL||"https://ai-opportunity-hub.onrender.com")+"/miniapp"},{text:"⭐ Premium",callback_data:"menu:premium"}]
     ]
   };
 
@@ -179,7 +181,8 @@ export function registerHubV2(app,{pool,telegram}){
         }
         if(data==="hub:android"){
           await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Loading Android AI"});
-          const r=await pool.query("SELECT * FROM ai_tools WHERE ai_tools.active=1 AND ai_tools.status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
+          let r=await pool.query("SELECT * FROM ai_tools WHERE ai_tools.active=1 AND ai_tools.status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
+          if(!r.rows.length) r=await pool.query("SELECT * FROM ai_tools WHERE ai_tools.active=1 AND ai_tools.status='active' ORDER BY name LIMIT 8");
           await send({text:format("📱 Android AI",r.rows),parse_mode:"HTML",reply_markup:menu});
           return res.sendStatus(200);
         }
@@ -208,7 +211,8 @@ export function registerHubV2(app,{pool,telegram}){
         if(legacy[data]){
           await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Loading"});
           if(data==="menu:android"){
-            const r=await pool.query("SELECT * FROM ai_tools WHERE ai_tools.active=1 AND ai_tools.status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
+            let r=await pool.query("SELECT * FROM ai_tools WHERE ai_tools.active=1 AND ai_tools.status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
+            if(!r.rows.length) r=await pool.query("SELECT * FROM ai_tools WHERE ai_tools.active=1 AND ai_tools.status='active' ORDER BY name LIMIT 8");
             await send({text:format("📱 Android AI",r.rows),parse_mode:"HTML",reply_markup:menu});
             return res.sendStatus(200);
           }
@@ -226,6 +230,11 @@ export function registerHubV2(app,{pool,telegram}){
           return res.sendStatus(200);
         }
         return next();
+      }
+
+      if(cmd==="/premium"){
+        await send({text:"⭐ <b>Premium</b>\\n\\nUse the Premium button to view available digital products.",parse_mode:"HTML",reply_markup:menu});
+        return res.sendStatus(200);
       }
 
       if(cmd==="/start"||cmd==="/help"){
