@@ -84,7 +84,7 @@ export function registerHubV2(app,{pool,telegram}){
   async function search(table,fields,q,lim){
     const term=String(q||"").trim();
     const values=[];
-    let where=table==="ai_tools"?"active=1 AND status='active'":"status='active'";
+    let where=table==="ai_tools"?"ai_tools.active=1 AND ai_tools.status='active'":"status='active'";
     if(term){
       values.push("%"+term+"%");
       where+=" AND ("+fields.map(f=>f+" ILIKE $1").join(" OR ")+")";
@@ -179,7 +179,7 @@ export function registerHubV2(app,{pool,telegram}){
         }
         if(data==="hub:android"){
           await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Loading Android AI"});
-          const r=await pool.query("SELECT * FROM ai_tools WHERE active=1 AND status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
+          const r=await pool.query("SELECT * FROM ai_tools WHERE ai_tools.active=1 AND ai_tools.status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
           await send({text:format("📱 Android AI",r.rows),parse_mode:"HTML",reply_markup:menu});
           return res.sendStatus(200);
         }
@@ -208,7 +208,7 @@ export function registerHubV2(app,{pool,telegram}){
         if(legacy[data]){
           await telegram("answerCallbackQuery",{callback_query_id:c.id,text:"Loading"});
           if(data==="menu:android"){
-            const r=await pool.query("SELECT * FROM ai_tools WHERE active=1 AND status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
+            const r=await pool.query("SELECT * FROM ai_tools WHERE ai_tools.active=1 AND ai_tools.status='active' AND platform ILIKE '%Android%' ORDER BY name LIMIT 12");
             await send({text:format("📱 Android AI",r.rows),parse_mode:"HTML",reply_markup:menu});
             return res.sendStatus(200);
           }
