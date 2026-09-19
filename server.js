@@ -2354,8 +2354,13 @@ Important:
 
 function cleanGeneratedPost(text) {
   return String(text || "")
-    .replace(/^\s*\`\`\`(?:markdown|text)?\s*/i, "")
-    .replace(/\s*\`\`\`\s*$/i, "")
+    .replace(/^\s*`{3}(?:markdown|text)?\s*/i, "")
+    .replace(/\s*`{3}\s*$/i, "")
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -2401,7 +2406,7 @@ Use this exact editorial style:
 - Keep factual details tied to the supplied source content.
 - If the source provides limited information, say only what is supported; do not fill gaps with assumptions.
 - Finish with ONE natural question that invites readers to comment.
-- Put the source URL on the final line.
+- Put the source URL on the final line as: "Source: [URL]"
 - For tutorials/resources, explain the topic and practical relevance without inventing steps.
 - For jobs/opportunities, mention application/access information only when verified.
 - For tools/apps, mention features, pricing, or availability only when verified.
