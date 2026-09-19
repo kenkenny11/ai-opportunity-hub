@@ -317,10 +317,13 @@ export function registerHubV2(app,{pool,telegram}){
         if(user?.id)await pool.query("UPDATE hub_users SET search_count=search_count+1,last_active=CURRENT_TIMESTAMP WHERE telegram_id=$1",[user.id]);
         return res.sendStatus(200);
       }
-      return next();
+      return res.sendStatus(200);
     }catch(e){
-      console.error("Hub v2 webhook:",e.message);
-      return next();
+      console.error("Hub v2 webhook:",e.stack||e.message);
+      if(id){
+        try{await send({text:"⚠️ I could not complete that request right now. Please try again.",parse_mode:"HTML",reply_markup:menu});}catch{}
+      }
+      return res.sendStatus(200);
     }
   });
 
