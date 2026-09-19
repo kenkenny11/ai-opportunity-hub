@@ -2461,7 +2461,7 @@ async function addAffiliateTrackingToPost(post, content) {
   const { rows } = await pool.query(
     `SELECT *
      FROM affiliate
-     WHERE active = 1       AND a.affiliate_url IS NOT NULL       AND a.affiliate_url <> ''
+     WHERE active = 1       AND affiliate_url IS NOT NULL       AND affiliate_url <> ''
      ORDER BY id ASC`
   );
 
