@@ -235,9 +235,12 @@ export function registerHubV2(app,{pool,telegram}){
 
   app.use("/telegram/webhook",async(req,res,next)=>{
     if(req.method!=="POST")return next();
+    const u=req.body||{};
+    const m=u.message;
+    const c=u.callback_query;
+    const id=m?.chat?.id||c?.message?.chat?.id||c?.from?.id;
     try{
       await ready();
-      const u=req.body||{},m=u.message,c=u.callback_query,id=m?.chat?.id||c?.message?.chat?.id||c?.from?.id;
       if(!id)return next();
       const user=m?.from||c?.from;
       if(user?.id){
@@ -245,6 +248,12 @@ export function registerHubV2(app,{pool,telegram}){
       }
       const data=String(c?.data||""),text=String(m?.text||"").trim(),cmd=(text.split(/\\s+/)[0]||"").toLowerCase().replace(/@[^\\s]+$/,"");
       const send=x=>telegram("sendMessage",{chat_id:id,...x});
+      const answerCallback=async(text)=>{
+        if(!c?.id)return;
+        try{await telegram("answerCallbackQuery",{callback_query_id:c.id,text});}catch(e){
+          console.warn("Telegram callback acknowledgement skipped:",e.message);
+        }
+      };
 
       if(c){
         if(data==="hub:home"){
