@@ -95,8 +95,28 @@ export function registerHubV2(app,{pool,telegram}){
 
   async function get(type,q){
     if(type==="tools")return {title:"🤖 AI Tools",type:"tools",items:(await search("ai_tools",["name","category","description","platform","use_cases","pricing","free_tier"],q,16)).rows};
-    if(type==="jobs")return {title:"💼 AI Jobs",type:"jobs",items:(await search("ai_jobs",["company","title","location","category","description"],q,12)).rows};
-    if(type==="opportunities")return {title:"💰 Make Money",type:"opportunities",items:(await search("opportunities",["title","type","description","requirements","earning_method"],q,12)).rows};
+    if(type==="jobs"){
+      const r=await search("ai_jobs",["company","title","location","category","description"],q,12);
+      if(r.rows.length) return {title:"💼 AI Jobs",type:"jobs",items:r.rows};
+      const fallback=await pool.query(
+        `SELECT id,title,body AS description,category,source_url,source
+         FROM content
+         WHERE status='published' AND category ILIKE '%AI Jobs%'
+         ORDER BY published_at DESC NULLS LAST,id DESC LIMIT 8`
+      );
+      return {title:"💼 AI Jobs",type:"jobs",items:fallback.rows};
+    }
+    if(type==="opportunities"){
+      const r=await search("opportunities",["title","type","description","requirements","earning_method"],q,12);
+      if(r.rows.length) return {title:"💰 Make Money",type:"opportunities",items:r.rows};
+      const fallback=await pool.query(
+        `SELECT id,title,body AS description,category,source_url,source
+         FROM content
+         WHERE status='published' AND category ILIKE '%Digital Opportunities%'
+         ORDER BY published_at DESC NULLS LAST,id DESC LIMIT 8`
+      );
+      return {title:"💰 Make Money",type:"opportunities",items:fallback.rows};
+    }
     if(type==="resources")return {title:"🆓 Free Resources",type:"resources",items:(await search("resources",["title","category","description","source"],q,12)).rows};
     if(type==="tutorials")return {title:"🎓 Learn AI",type:"tutorials",items:(await search("tutorials",["title","topic","content","tools_required"],q,12)).rows};
     if(type==="trending"){
