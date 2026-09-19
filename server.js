@@ -1,7 +1,6 @@
 import express from "express";
 import pg from "pg";
 import * as cheerio from "cheerio";
-import { registerHubV2 } from "./hub-v2.js";
 
 const { Pool } = pg;
 
@@ -318,9 +317,6 @@ async function telegram(method, body = {}) {
 
   return data;
 }
-
-// AI Opportunity Hub v2 service layer: universal search, user routing and Mini App.
-registerHubV2(app, { pool, telegram });
 
 async function fetchPage(url) {
   const response = await fetch(url, {
@@ -3711,63 +3707,54 @@ async function runAutomationCycle() {
   }
 }
 
+app.post("/api/automation/run", async (req, res) => {
+  if (req.get("x-automation-trigger") !== "github-actions") {
+    return res.status(403).json({ error: "Automation trigger not authorized" });
+  }
+
+  const client = await pool.connect();
+  try {
+    const lock = await client.query("SELECT pg_try_advisory_lock(817263541)");
+    if (!lock.rows[0].pg_try_advisory_lock) {
+      return res.status(409).json({ running: true, message: "Automation cycle already running" });
+    }
+
+    const started = Date.now();
+    try {
+      const result = await runAutomationCycle();
+      return res.json({ ok: true, duration_ms: Date.now() - started, result });
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(817263541)").catch(() => {});
+    }
+  } catch (error) {
+    console.error("Scheduled automation trigger failed:", error);
+    return res.status(500).json({ ok: false, error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
 async function startServer() {
   try {
     await initializeDatabase();
 
-    if (BOT_TOKEN && process.env.PUBLIC_BASE_URL) {
-      const miniAppUrl = `${process.env.PUBLIC_BASE_URL.replace(/\/+$/, "")}/miniapp`;
-      telegram("setChatMenuButton", {
-        menu_button: {
-          type: "web_app",
-          text: "🚀 Open AI Hub",
-          web_app: { url: miniAppUrl }
-        }
-      }).catch((error) => console.error("Telegram Mini App menu setup failed:", error.message));
+    if (BOT_TOKEN) {
+      telegram("deleteWebhook", { drop_pending_updates: false })
+        .then(() => console.log("Telegram interactive webhook disabled"))
+        .catch((error) => console.error("Telegram webhook cleanup failed:", error.message));
     }
 
     app.listen(PORT, () => {
-      console.log(
-        `AI Opportunity Hub running on port ${PORT}`
-      );
-      if (BOT_TOKEN) {
-        telegram("setMyCommands", {
-          commands: [
-            { command: "start", description: "Start AI Opportunity Hub" },
-            { command: "tools", description: "Find useful AI tools" },
-            { command: "jobs", description: "AI jobs and opportunities" },
-            { command: "free", description: "Free AI resources" },
-            { command: "learn", description: "AI tutorials" },
-            { command: "premium", description: "Premium resources" },
-            { command: "help", description: "Get help" }
-          ]
-        }).catch((error) => console.error("Telegram commands setup failed:", error.message));
-      }
-
-      if (process.env.PUBLIC_BASE_URL && BOT_TOKEN) {
-        const webhookUrl = `${process.env.PUBLIC_BASE_URL.endsWith("/") ? process.env.PUBLIC_BASE_URL.slice(0, -1) : process.env.PUBLIC_BASE_URL}/telegram/webhook`;
-        telegram("setWebhook", {
-          url: webhookUrl,
-          ...(process.env.TELEGRAM_WEBHOOK_SECRET ? { secret_token: process.env.TELEGRAM_WEBHOOK_SECRET } : {})
-        }).then(() => console.log("Telegram webhook configured:", webhookUrl))
-          .catch((error) => console.error("Telegram webhook setup failed:", error.message));
-      }
-
-      setTimeout(() => {
-        runAutomationCycle();
-      }, 15000);
-
-      setInterval(() => {
-        runAutomationCycle();
-      }, 30 * 60 * 1000);
+      console.log("AI Opportunity Hub running on port " + PORT);
+      console.log("Automation scheduler: GitHub Actions");
+      console.log("Internal interval disabled so Render Free sleep cannot stop scheduled publishing.");
     });
   } catch (error) {
-    console.error(
-      "Failed to start server:",
-      error
-    );
+    console.error("Failed to start server:", error);
     process.exit(1);
   }
 }
+
+startServer();
 
 startServer();
