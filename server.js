@@ -318,6 +318,73 @@ async function telegram(method, body = {}) {
   return data;
 }
 
+async function getPagePreviewImage(url) {
+  if (!url || !/^https?:\/\//i.test(String(url))) return null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch(String(url), {
+      headers: { "User-Agent": "AI-Opportunity-Hub/1.0" },
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!response.ok) return null;
+    const html = await response.text();
+    const tags = [
+      /<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["'][^>]*>/i,
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::secure_url)?["'][^>]*>/i,
+      /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["'][^>]*>/i,
+      /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["'][^>]*>/i
+    ];
+    for (const re of tags) {
+      const match = html.match(re);
+      if (match?.[1]) {
+        return new URL(match[1].replace(/&amp;/g, "&"), String(url)).href;
+      }
+    }
+  } catch (error) {
+    console.warn("Preview image lookup failed:", error.message);
+  }
+  return null;
+}
+
+async function publishTelegramContent(content) {
+  const imageUrl = await getPagePreviewImage(content.source_url);
+  let photoMessageId = null;
+
+  if (imageUrl) {
+    try {
+      const photoResult = await telegram("sendPhoto", {
+        chat_id: CHANNEL_USERNAME,
+        photo: imageUrl,
+        caption: String(content.title || "AI Opportunity Hub").slice(0, 1024)
+      });
+      if (photoResult?.ok && photoResult?.result?.message_id) {
+        photoMessageId = photoResult.result.message_id;
+      }
+    } catch (error) {
+      console.warn("Source image publish failed, continuing with link preview:", error.message);
+    }
+  }
+
+  const textResult = await telegram("sendMessage", {
+    chat_id: CHANNEL_USERNAME,
+    text: content.body,
+    disable_web_page_preview: false
+  });
+
+  if (!textResult?.ok || !textResult?.result?.message_id) {
+    throw new Error(textResult?.description || "Telegram publish failed");
+  }
+
+  return {
+    message_id: textResult.result.message_id,
+    photo_message_id: photoMessageId,
+    image_url: imageUrl
+  };
+}
+
+
 async function fetchPage(url) {
   const response = await fetch(url, {
     headers: {
