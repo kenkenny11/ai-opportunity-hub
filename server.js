@@ -2367,94 +2367,51 @@ async function generateContentWithAI(content) {
   const category = content.category || "AI News";
 
   let verifiedContext = "";
-  if (category === "AI Jobs" && content.source && /Wellfound/i.test(content.source) && content.source_url) {
+  if (content.source_url) {
     try {
-      const jobHtml = await fetchPage(content.source_url);
-      const jobPage = cheerio.load(jobHtml);
+      const sourceHtml = await fetchPage(content.source_url);
+      const page = cheerio.load(sourceHtml);
       const metaDescription =
-        jobPage('meta[name="description"]').attr("content") ||
-        jobPage('meta[property="og:description"]').attr("content") ||
+        page('meta[name="description"]').attr("content") ||
+        page('meta[property="og:description"]').attr("content") ||
         "";
-      const visibleText = jobPage("body").text().replace(/\\s+/g, " ").trim();
-      verifiedContext = [metaDescription, visibleText.slice(0, 5000)]
+      const visibleText = page("body").text().replace(/\s+/g, " ").trim();
+      verifiedContext = [metaDescription, visibleText.slice(0, 7000)]
         .filter(Boolean)
-        .join("\\n");
+        .join("\n");
     } catch {
       verifiedContext = "";
     }
   }
 
-  let formatRules = "";
-
-  if (category === "AI Jobs") {
-    formatRules = `
-JOB FORMAT:
-- Clearly state the job/role if verified by the title.
-- Mention company, location/remote status, and application details only when present in the verified information.
-- Do not invent salary, requirements, visa support, or benefits.
-- End with: "🔗 Apply: [source URL]"
-`;
-  } else if (category === "Digital Opportunities") {
-    formatRules = `
-OPPORTUNITY FORMAT:
-- Clearly explain what the opportunity/product is from the verified information.
-- Mention launch, access, pricing, or availability only when supported.
-- Do not promise income, success, or business results.
-- End with: "🔗 Source: [source URL]"
-`;
-  } else if (category === "AI Tools" || category === "Android & AI Apps") {
-    formatRules = `
-TOOL FORMAT:
-- Explain what the tool/app is based only on the verified title and source.
-- Mention platform, pricing, features, or access only when verified.
-- Do not claim a tool is "best", "free", "unlimited", or "powerful" unless verified.
-- End with: "🔗 Try it / Source: [source URL]"
-`;
-  } else if (category === "AI Tutorials" || category === "Tutorials") {
-    formatRules = `
-TUTORIAL FORMAT:
-- Explain the topic and the practical idea covered by the source.
-- Do not invent steps that are not supported by the source information.
-- End with: "🔗 Read the tutorial: [source URL]"
-`;
-  } else if (category === "Free Resources") {
-    formatRules = `
-FREE RESOURCE FORMAT:
-- Explain the resource and what is verified about its access.
-- Do not claim something is free if the source information does not support it.
-- End with: "🔗 Resource: [source URL]"
-`;
-  } else {
-    formatRules = `
-NEWS FORMAT:
-- State what was announced using only verified information.
-- Keep context factual and cautious.
-- End with: "🔗 Source: [source URL]"
-`;
-  }
-
-  const prompt = `Create a factual Telegram post for AI Opportunity Hub.
+  const prompt = `Create a factual, natural Telegram post for AI Opportunity Hub.
 
 Title: ${content.title}
 Source: ${content.source}
 URL: ${content.source_url || ""}
 Category: ${category}
-Verified source context (use only if present; do not infer missing facts):
-${verifiedContext || "(No additional source text was available.)"}
 
-Strict rules:
-- Treat the title as the main verified claim.
-- Do not invent or infer features, capabilities, performance, availability, pricing, legal rights, dates, user benefits, statistics, quotes, salary, requirements, or industry impact.
-- Do not promise income, jobs, business results, or financial outcomes.
-- Avoid promotional phrases such as "game-changing", "major boost", "revolutionary", "best", "guaranteed", "easy money", or "get rich".
-- If source details are limited, keep the post short rather than filling gaps with assumptions.
-- Keep it about 80-150 words.
-- Start with a clear headline.
-- End with one short engagement question.
-- Use the exact source URL supplied above.
+Verified source content:
+${verifiedContext || "(No source text available. Use only the verified title and source name.)"}
+
+Use this exact editorial style:
+- Begin with the title as a clean headline.
+- Write 1-2 short paragraphs explaining what the source reports or teaches.
+- Make the wording natural and informative, like a concise technology news/resource channel.
+- Keep factual details tied to the supplied source content.
+- If the source provides limited information, say only what is supported; do not fill gaps with assumptions.
+- Finish with ONE natural question that invites readers to comment.
+- Put the source URL on the final line.
+- For tutorials/resources, explain the topic and practical relevance without inventing steps.
+- For jobs/opportunities, mention application/access information only when verified.
+- For tools/apps, mention features, pricing, or availability only when verified.
+- Do not use promotional claims, hype, guarantees, or invented benefits.
+- Do not add emojis unless they are useful for the source/link line.
+- Do not add headings such as "Summary", "Key Features", "Why it matters", or "What this means".
+- Target 90-160 words.
 - Return ONLY the finished Telegram post.
 
-${formatRules}`;
+`;
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -2469,15 +2426,12 @@ ${formatRules}`;
       messages: [
         {
           role: "system",
-          content: "You write concise, factual Telegram posts. Never invent facts."
+          content: "Write concise, factual technology Telegram posts in a natural editorial style. Never invent facts."
         },
-        {
-          role: "user",
-          content: prompt
-        }
+        { role: "user", content: prompt }
       ],
       temperature: 0.2,
-      max_tokens: 500
+      max_tokens: 600
     })
   });
 
@@ -2488,10 +2442,7 @@ ${formatRules}`;
 
   const data = await response.json();
   const raw = data.choices?.[0]?.message?.content;
-
-  if (!raw) {
-    throw new Error("OpenRouter returned no generated content");
-  }
+  if (!raw) throw new Error("OpenRouter returned no generated content");
 
   return cleanGeneratedPost(raw);
 }
