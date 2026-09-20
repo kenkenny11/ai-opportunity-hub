@@ -14,7 +14,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
 const DATABASE_URL = process.env.DATABASE_URL;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 const FUTUREPEDIA_HOME = "https://www.futurepedia.io/";
 const AFFILIATE_ADMIN_KEY = process.env.AFFILIATE_ADMIN_KEY;
 const ADMIN_DASHBOARD_KEY = process.env.ADMIN_DASHBOARD_KEY;
@@ -3662,13 +3662,13 @@ function normalizeFuturepediaTitle(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
-async function callGeminiWithFallback(bodyFactory, preferredModel = GEMINI_MODEL) {
-  const models = [preferredModel, "gemini-3.6-flash", "gemini-3.5-flash"];
-  const tried = new Set();
+async function callGemini(bodyFactory) {
+  const models = [GEMINI_MODEL, "gemini-3.6-flash", "gemini-3.5-flash"];
+  const seen = new Set();
 
   for (const model of models) {
-    if (!model || tried.has(model)) continue;
-    tried.add(model);
+    if (seen.has(model)) continue;
+    seen.add(model);
 
     const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
       method: "POST",
@@ -3680,128 +3680,85 @@ async function callGeminiWithFallback(bodyFactory, preferredModel = GEMINI_MODEL
     });
 
     const data = await response.json();
-
-    if (response.ok) return { data, model };
+    if (response.ok) return data;
 
     const message = data?.error?.message || JSON.stringify(data).slice(0, 500);
-    console.warn("Gemini model " + model + " failed with HTTP " + response.status + ": " + message);
+    console.warn("Gemini " + model + " returned HTTP " + response.status + ": " + message);
 
     if (![429, 500, 502, 503, 504].includes(response.status)) {
       throw new Error("Gemini HTTP " + response.status + ": " + message);
     }
   }
 
-  throw new Error("All configured Gemini models are temporarily unavailable");
+  throw new Error("Gemini models temporarily unavailable");
 }
 
 async function getFuturepediaToolCandidates() {
-  try {
-    const html = await fetchPage(FUTUREPEDIA_HOME);
-    const $ = cheerio.load(html);
-    const out = [];
-    const seen = new Set();
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
 
-    $("a[href]").each((index, element) => {
-      const href = $(element).attr("href");
-      if (!href) return;
-
-      let url;
-      try { url = new URL(href, FUTUREPEDIA_HOME); } catch { return; }
-
-      if (url.hostname !== "www.futurepedia.io" || !url.pathname.startsWith("/tool/")) return;
-
-      const key = url.href.split("#")[0];
-      if (seen.has(key)) return;
-
-      const title = normalizeFuturepediaTitle(
-        $(element).find("h1,h2,h3,h4,h5,h6").first().text() ||
-        $(element).text() ||
-        url.pathname.split("/").pop().replace(/-/g, " ")
-      );
-
-      if (title.length < 2 || title.length > 140) return;
-
-      seen.add(key);
-      out.push({
-        title,
-        url: key,
-        context: $(element).parent().text().replace(/\s+/g, " ").trim().slice(0, 700)
-      });
-    });
-
-    if (out.length) return out.slice(0, 150);
-    throw new Error("Futurepedia returned no tool links");
-  } catch (directError) {
-    console.warn("Futurepedia direct fetch failed; using Gemini URL Context fallback:", directError.message);
-
-    if (!GEMINI_API_KEY) throw directError;
-
-    const schema = {
-      type: "object",
-      properties: {
-        candidates: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              title: { type: "string" },
-              url: { type: "string" },
-              context: { type: "string" }
-            },
-            required: ["title", "url", "context"]
-          }
+  const schema = {
+    type: "object",
+    properties: {
+      candidates: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            url: { type: "string" },
+            context: { type: "string" }
+          },
+          required: ["title", "url", "context"]
         }
-      },
-      required: ["candidates"]
-    };
+      }
+    },
+    required: ["candidates"]
+  };
 
-    const gemini = await callGeminiWithFallback((model) => ({
-      model,
-      input:
-        "Read the Futurepedia homepage at " + FUTUREPEDIA_HOME + " using URL Context. " +
-        "Identify 10 currently featured, trending, or prominently listed AI tools. " +
-        "Return only tools that have a real Futurepedia URL under https://www.futurepedia.io/tool/. " +
-        "Use exact Futurepedia tool URLs when available. Do not invent URLs. " +
-        "For each, give the visible tool name and a short factual context from Futurepedia.",
-      tools: [{ type: "url_context" }],
-      response_format: { type: "text", mime_type: "application/json", schema },
-      generation_config: { max_output_tokens: 1200 }
-    }));
+  const data = await callGemini((model) => ({
+    model,
+    input:
+      "Use URL Context to read " + FUTUREPEDIA_HOME + ". " +
+      "Identify up to 10 currently featured, popular, recently added, trending, or prominently listed AI tools. " +
+      "Return only tools whose exact page URL is under https://www.futurepedia.io/tool/. " +
+      "Do not invent URLs. Give the tool name and a short factual context visible on Futurepedia.",
+    tools: [{ type: "url_context" }],
+    response_format: { type: "text", mime_type: "application/json", schema },
+    generation_config: { max_output_tokens: 1200 }
+  }));
 
-    const data = gemini.data;
-    const output = (data.steps || [])
-      .filter((step) => step.type === "model_output")
-      .flatMap((step) => step.content || [])
-      .filter((block) => block.type === "text")
-      .map((block) => block.text || "")
-      .join("")
-      .trim();
+  const output = (data.steps || [])
+    .filter((step) => step.type === "model_output")
+    .flatMap((step) => step.content || [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.text || "")
+    .join("")
+    .trim();
 
-    if (!output) throw new Error("Gemini Futurepedia fallback returned no content");
+  if (!output) throw new Error("Gemini returned no Futurepedia tool candidates");
 
-    let parsed;
-    try { parsed = JSON.parse(output); }
-    catch { throw new Error("Gemini Futurepedia fallback returned invalid JSON"); }
+  let parsed;
+  try { parsed = JSON.parse(output); }
+  catch { throw new Error("Gemini returned invalid Futurepedia candidate JSON"); }
 
-    const candidates = (parsed.candidates || [])
-      .filter((item) => {
-        try {
-          const u = new URL(String(item.url));
-          return u.hostname === "www.futurepedia.io" && u.pathname.startsWith("/tool/");
-        } catch {
-          return false;
-        }
-      })
-      .map((item) => ({
-        title: normalizeFuturepediaTitle(String(item.title || "")),
-        url: String(item.url).split("#")[0],
-        context: String(item.context || "").replace(/\s+/g, " ").trim().slice(0, 700)
-      }))
-      .filter((item) => item.title.length >= 2 && item.title.length <= 140);
+  const candidates = (parsed.candidates || [])
+    .filter((item) => {
+      try {
+        const u = new URL(String(item.url));
+        return u.hostname === "www.futurepedia.io" && u.pathname.startsWith("/tool/");
+      } catch {
+        return false;
+      }
+    })
+    .map((item) => ({
+      title: normalizeFuturepediaTitle(String(item.title || "")),
+      url: String(item.url).split("#")[0],
+      context: String(item.context || "").replace(/\s+/g, " ").trim().slice(0, 700)
+    }))
+    .filter((item) => item.title.length >= 2 && item.title.length <= 140);
 
-    if (!candidates.length) throw new Error("Gemini Futurepedia fallback returned no valid tool URLs");
-    return candidates.slice(0, 10);
-  }
+  if (!candidates.length) throw new Error("No valid Futurepedia tool URLs returned");
+  return candidates.slice(0, 10);
 }
 
 async function generateFuturepediaPost(tool) {
@@ -3821,19 +3778,19 @@ async function generateFuturepediaPost(tool) {
   const prompt =
     "You are the editorial writer for AI Opportunity Hub.\n\n" +
     "Reference source: " + tool.url + "\n\n" +
-    "Read that Futurepedia page and create one current factual Telegram update about the AI tool.\n\n" +
+    "Read the Futurepedia page and create one current factual Telegram update about this AI tool.\n\n" +
     "Rules:\n" +
     "- Futurepedia is the reference source.\n" +
     "- Use only facts supported by the page.\n" +
     "- Do not invent features, pricing, ratings, users, dates, integrations or performance claims.\n" +
     "- State pricing carefully because it can change.\n" +
     "- Explain what the tool does and mention concrete capabilities only when supported.\n" +
-    "- Write naturally and do not copy sentences from Futurepedia.\n" +
+    "- Write naturally; do not copy sentences from Futurepedia.\n" +
     "- No hype, promises or affiliate language.\n" +
     "- Make the post 90-160 words.\n" +
-    "- Return JSON matching the schema exactly.\n";
+    "- Return JSON matching the schema exactly.";
 
-  const gemini = await callGeminiWithFallback((model) => ({
+  const data = await callGemini((model) => ({
     model,
     input: prompt,
     tools: [{ type: "url_context" }],
@@ -3841,7 +3798,6 @@ async function generateFuturepediaPost(tool) {
     generation_config: { max_output_tokens: 700 }
   }));
 
-  const data = gemini.data;
   const output = (data.steps || [])
     .filter((step) => step.type === "model_output")
     .flatMap((step) => step.content || [])
@@ -3854,7 +3810,7 @@ async function generateFuturepediaPost(tool) {
 
   let result;
   try { result = JSON.parse(output); }
-  catch { throw new Error("Gemini returned invalid JSON"); }
+  catch { throw new Error("Gemini returned invalid post JSON"); }
 
   if (!result.title || !result.tool_name || !result.post) {
     throw new Error("Gemini response is missing required post fields");
