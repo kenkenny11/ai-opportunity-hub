@@ -3788,7 +3788,6 @@ async function chooseFuturepediaTool(candidates) {
 }
 
 async function generateFuturepediaPost(tool) {
-  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not confasync function generateFuturepediaPost(tool) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
 
   const prompt =
@@ -3830,15 +3829,11 @@ async function generateFuturepediaPost(tool) {
     throw new Error("Gemini returned incomplete Telegram post fields");
   }
 
-  return {
-    title,
-    tool_name: toolName,
-    post,
-    official_url: officialUrl
-  };
+  return { title, tool_name: toolName, post, official_url: officialUrl };
 }
 
-red");
+async function runFuturepediaHourlyCycle() {
+  if (!BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
   if (!CHANNEL_USERNAME) throw new Error("TELEGRAM_CHANNEL_USERNAME is not configured");
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
 
@@ -3864,6 +3859,7 @@ red");
     "SELECT id FROM content WHERE LOWER(title)=LOWER($1) OR source_url=$2 LIMIT 1",
     [generated.title, tool.url]
   );
+
   if (duplicate.rows.length) {
     return { published: false, skipped: "duplicate", content_id: duplicate.rows[0].id, tool: tool.title };
   }
@@ -3887,6 +3883,7 @@ red");
   );
 
   console.log("Futurepedia published #" + content.id + ": " + generated.tool_name);
+
   return {
     published: true,
     content_id: content.id,
