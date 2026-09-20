@@ -3662,6 +3662,25 @@ function normalizeFuturepediaTitle(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function parseGeminiJson(text) {
+  const cleaned = String(text || "")
+    .replace(/^\s*```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {}
+
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    return JSON.parse(cleaned.slice(first, last + 1));
+  }
+
+  throw new Error("Gemini returned invalid JSON");
+}
+
 async function callGemini(bodyFactory) {
   const models = [GEMINI_MODEL, "gemini-3.6-flash", "gemini-3.5-flash"];
   const seen = new Set();
@@ -3738,7 +3757,7 @@ async function getFuturepediaToolCandidates() {
   if (!output) throw new Error("Gemini returned no Futurepedia tool candidates");
 
   let parsed;
-  try { parsed = JSON.parse(output); }
+  try { parsed = parseGeminiJson(output); }
   catch { throw new Error("Gemini returned invalid Futurepedia candidate JSON"); }
 
   const candidates = (parsed.candidates || [])
@@ -3827,7 +3846,7 @@ async function generateFuturepediaPost(tool) {
   if (!output) throw new Error("Gemini returned no generated content");
 
   let result;
-  try { result = JSON.parse(output); }
+  try { result = parseGeminiJson(output); }
   catch { throw new Error("Gemini returned invalid post JSON"); }
 
   if (!result.title || !result.tool_name || !result.post) {
