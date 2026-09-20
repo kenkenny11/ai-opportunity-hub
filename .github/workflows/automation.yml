@@ -24,7 +24,7 @@ jobs:
           HUB_URL: https://ai-opportunity-hub.onrender.com
         run: |
           set -e
-          echo "Running AI Opportunity Hub hourly automation..."
+          echo "Running AI Opportunity Hub live Futurepedia test..."
           curl --fail --show-error --silent --location \
             --max-time 180 \
             --retry 3 \
