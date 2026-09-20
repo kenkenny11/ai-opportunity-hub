@@ -3761,6 +3761,24 @@ async function getFuturepediaToolCandidates() {
   return candidates.slice(0, 10);
 }
 
+async function chooseFuturepediaTool(candidates) {
+  if (!candidates.length) throw new Error("Futurepedia returned no AI tool candidates");
+
+  const recent = await pool.query(
+    'SELECT source_url FROM content WHERE status = \'published\' AND source_url IS NOT NULL AND published_at > CURRENT_TIMESTAMP - INTERVAL \'30 days\' ORDER BY published_at DESC LIMIT 500'
+  );
+  const used = new Set(recent.rows.map((row) => String(row.source_url)));
+  const fresh = candidates.find((candidate) => !used.has(candidate.url));
+
+  if (fresh) return fresh;
+
+  const older = await pool.query(
+    'SELECT source_url FROM content WHERE source_url IS NOT NULL ORDER BY created_at DESC LIMIT 500'
+  );
+  const allUsed = new Set(older.rows.map((row) => String(row.source_url)));
+  return candidates.find((candidate) => !allUsed.has(candidate.url)) || candidates[0];
+}
+
 async function generateFuturepediaPost(tool) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
 
@@ -3811,91 +3829,6 @@ async function generateFuturepediaPost(tool) {
   let result;
   try { result = JSON.parse(output); }
   catch { throw new Error("Gemini returned invalid post JSON"); }
-
-  if (!result.title || !result.tool_name || !result.post) {
-    throw new Error("Gemini response is missing required post fields");
-  }
-
-  return {
-    title: String(result.title).trim(),
-    tool_name: String(result.tool_name).trim(),
-    post: String(result.post).trim(),
-    official_url: String(result.official_url || "").trim()
-  };
-}
-
-async function chooseFuturepediaTool(candidates) {
-  if (!candidates.length) throw new Error("Futurepedia returned no AI tool candidates");
-
-  const recent = await pool.query(
-    'SELECT source_url FROM content WHERE status = \'published\' AND source_url IS NOT NULL AND published_at > CURRENT_TIMESTAMP - INTERVAL \'30 days\' ORDER BY published_at DESC LIMIT 500'
-  );
-  const used = new Set(recent.rows.map((row) => String(row.source_url)));
-  const fresh = candidates.find((candidate) => !used.has(candidate.url));
-
-  if (fresh) return fresh;
-
-  const older = await pool.query(
-    'SELECT source_url FROM content WHERE source_url IS NOT NULL ORDER BY created_at DESC LIMIT 500'
-  );
-  const allUsed = new Set(older.rows.map((row) => String(row.source_url)));
-  return candidates.find((candidate) => !allUsed.has(candidate.url)) || candidates[0];
-}
-
-async function generateFuturepediaPost(tool) {
-  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
-
-  const schema = {
-    type: "object",
-    properties: {
-      title: { type: "string" },
-      tool_name: { type: "string" },
-      post: { type: "string" },
-      official_url: { type: "string" }
-    },
-    required: ["title", "tool_name", "post", "official_url"]
-  };
-
-  const prompt =
-    "You are the editorial writer for AI Opportunity Hub.\n\n" +
-    "Reference source: " + tool.url + "\n\n" +
-    "Read that Futurepedia page and create one current factual Telegram update about the AI tool.\n\n" +
-    "Rules:\n" +
-    "- Futurepedia is the reference source.\n" +
-    "- Use only facts supported by the page.\n" +
-    "- Do not invent features, pricing, ratings, users, dates, integrations or performance claims.\n" +
-    "- State pricing carefully because it can change.\n" +
-    "- Explain what the tool does and mention concrete capabilities only when supported.\n" +
-    "- Write naturally and do not copy sentences from Futurepedia.\n" +
-    "- No hype, promises or affiliate language.\n" +
-    "- Make the post 90-160 words.\n" +
-    "- Return JSON matching the schema exactly.\n\n" +
-    "Futurepedia homepage title: " + tool.title + "\n" +
-    "Homepage context: " + tool.context;
-
-  const gemini = await callGeminiWithFallback((model) => ({
-    model,
-      input: prompt,
-      tools: [{ type: "url_context" }],
-      response_format: { type: "text", mime_type: "application/json", schema },
-      generation_config: { max_output_tokens: 700 }
-    })
-  });
-
-  const data = gemini.data;
-
-  const output = (data.steps || [])
-    .filter((step) => step.type === "model_output")
-    .flatMap((step) => step.content || [])
-    .filter((block) => block.type === "text")
-    .map((block) => block.text || "")
-    .join("")
-    .trim();
-
-  if (!output) throw new Error("Gemini returned no generated content");
-
-  let result;
-  try { result = JSON.parse(output); } catch { throw new Error("Gemini returned invalid JSON"); }
 
   if (!result.title || !result.tool_name || !result.post) {
     throw new Error("Gemini response is missing required post fields");
