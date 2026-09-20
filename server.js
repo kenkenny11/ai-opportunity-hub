@@ -14,7 +14,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
 const DATABASE_URL = process.env.DATABASE_URL;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const FUTUREPEDIA_HOME = "https://www.futurepedia.io/";
 const AFFILIATE_ADMIN_KEY = process.env.AFFILIATE_ADMIN_KEY;
 const ADMIN_DASHBOARD_KEY = process.env.ADMIN_DASHBOARD_KEY;
@@ -3682,7 +3682,7 @@ function parseGeminiJson(text) {
 }
 
 async function callGemini(bodyFactory) {
-  const models = [GEMINI_MODEL, "gemini-3.6-flash", "gemini-3.5-flash"];
+  const models = [GEMINI_MODEL, "gemini-3.6-flash"];
   const seen = new Set();
 
   for (const model of models) {
