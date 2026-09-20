@@ -3775,16 +3775,24 @@ async function generateFuturepediaPost(tool) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
 
   const prompt =
-    "Read this Futurepedia page: " + tool.url + "\n\n" +
-    "Write a factual 90-160 word Telegram update about this AI tool using only information from the page. " +
-    "No hype and no invented claims. Start with a short headline, then the post text, and finish with the official website URL if visible. " +
-    "Plain text only.";
+    "Read and inspect this Futurepedia tool page with URL Context: " + tool.url + "\n\n" +
+    "Create a high-quality, current Telegram AI-tools update about this tool. Use factual information available on the Futurepedia page and clearly distinguish listed facts from roadmap/beta information. " +
+    "The post MUST cover: (1) a strong eye-catching opening paragraph explaining what the tool has advanced to and why the current version matters, " +
+    "(2) the main features and capabilities, " +
+    "(3) what is available on free versus paid plans/versions when the page provides that information, " +
+    "(4) upcoming, beta, preview, experimental, or recently introduced features when explicitly stated, " +
+    "(5) current offers, trials, discounts, credits, or version-specific availability when explicitly listed, " +
+    "(6) who the tool is useful for, and " +
+    "(7) the official website. " +
+    "Never invent pricing, features, beta status, offers, release dates, or roadmap claims. If a requested item is not stated on the source page, say 'Not listed on the Futurepedia page' rather than guessing. " +
+    "Write 180-300 words. Use a concise headline followed by readable short paragraphs and bullets. Make it informative and engaging, not promotional hype. " +
+    "Return plain text only.";
 
   const data = await callGemini((model) => ({
     model,
     input: prompt,
     tools: [{ type: "url_context" }],
-    generation_config: { max_output_tokens: 700 }
+    generation_config: { max_output_tokens: 1200 }
   }));
 
   let output = (data.steps || [])
@@ -3801,27 +3809,21 @@ async function generateFuturepediaPost(tool) {
 
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   let title = lines[0] || tool.title;
-  let officialUrl = "";
-  const urlMatch = output.match(/https?:\/\/[^\s)]+/i);
-  if (urlMatch) officialUrl = urlMatch[0].replace(/[),.;]+$/, "");
-
   const titleMatch = output.match(/^(?:TITLE|HEADLINE):\s*(.+)$/im);
   if (titleMatch) title = titleMatch[1].trim();
 
   const toolMatch = output.match(/^(?:TOOL_NAME|TOOL):\s*(.+)$/im);
   const toolName = toolMatch ? toolMatch[1].trim() : tool.title;
 
-  const postMatch = output.match(/(?:POST|BODY|UPDATE):\s*\n?([\s\S]*)/i);
-  let post = postMatch ? postMatch[1].trim() : output;
+  const urlMatches = output.match(/https?:\/\/[^\s)]+/gi) || [];
+  const officialUrl = urlMatches.find((u) => !u.includes("futurepedia.io"))?.replace(/[),.;]+$/, "") || "";
 
-  post = post
+  let post = output
     .replace(/^(?:TITLE|HEADLINE|TOOL_NAME|TOOL|OFFICIAL_URL|SOURCE):.*$/gim, "")
     .replace(/^[-|]+\s*/gm, "")
     .trim();
 
-  if (post.length < 40) {
-    throw new Error("Gemini returned an incomplete Telegram post");
-  }
+  if (post.length < 100) throw new Error("Gemini returned an incomplete Telegram post");
 
   return {
     title: title.replace(/^(?:TITLE|HEADLINE):\s*/i, "").trim(),
