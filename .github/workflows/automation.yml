@@ -31,3 +31,5 @@ jobs:
             "$HUB_URL/api/automation/run"
           echo
           echo "Hourly automation completed."
+
+# Live test trigger after deployment stabilization
