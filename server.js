@@ -3714,16 +3714,16 @@ async function callGemini(bodyFactory) {
 
 async function getFuturepediaToolCandidates() {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
-
   const data = await callGemini((model) => ({
     model,
     input:
-      "Use URL Context to read " + FUTUREPEDIA_HOME + ". " +
-      "Identify up to 10 currently featured, popular, recently added, trending, or prominently listed AI tools. " +
-      "Return EXACTLY one line per tool in this format: TOOL: name | URL: https://www.futurepedia.io/tool/... | CONTEXT: short factual context. " +
-      "Use only exact Futurepedia tool URLs. Do not invent URLs. No markdown, no bullets, no extra commentary.",
+      "Open and inspect " + FUTUREPEDIA_HOME + " with URL Context. " +
+      "Find up to 10 AI tools that Futurepedia currently features, highlights, lists as popular, trending, or recently added. " +
+      "For each tool provide its exact Futurepedia page URL. " +
+      "Return ONLY the URLs, one per line, and nothing else. " +
+      "Every URL must begin with https://www.futurepedia.io/tool/.",
     tools: [{ type: "url_context" }],
-    generation_config: { max_output_tokens: 1200 }
+    generation_config: { max_output_tokens: 1000 }
   }));
 
   const output = (data.steps || [])
@@ -3734,41 +3734,25 @@ async function getFuturepediaToolCandidates() {
     .join("\n")
     .trim();
 
-  if (!output) throw new Error("Gemini returned no Futurepedia tool candidates");
-
+  const matches = output.match(/https?:\/\/[^\s<>\"']+/gi) || [];
   const candidates = [];
-  const re = /TOOL:\s*(.*?)\s*\|\s*URL:\s*(https:\/\/www\.futurepedia\.io\/tool\/[^\s|]+)\s*\|\s*CONTEXT:\s*(.*)/gi;
-  let match;
-
-  while ((match = re.exec(output)) !== null) {
-    candidates.push({
-      title: normalizeFuturepediaTitle(match[1]),
-      url: match[2].split("#")[0],
-      context: String(match[3] || "").replace(/\s+/g, " ").trim().slice(0, 700)
-    });
-  }
-
-  if (!candidates.length) {
-    const urls = [...output.matchAll(/https:\/\/www\.futurepedia\.io\/tool\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=-]+/gi)];
-    for (const item of urls) {
-      const url = item[0].replace(/[),.;]+$/, "");
-      const slug = url.split("/").filter(Boolean).pop().replace(/-/g, " ");
-      candidates.push({ title: normalizeFuturepediaTitle(slug), url, context: "" });
-    }
-  }
-
-  const unique = [];
   const seen = new Set();
-  for (const candidate of candidates) {
-    if (!candidate.title || seen.has(candidate.url)) continue;
-    seen.add(candidate.url);
-    unique.push(candidate);
+
+  for (let raw of matches) {
+    raw = raw.replace(/[),.;]}]+$/, "");
+    let parsed;
+    try { parsed = new URL(raw); } catch { continue; }
+    if (parsed.hostname !== "www.futurepedia.io" || !parsed.pathname.startsWith("/tool/")) continue;
+    const url = parsed.origin + parsed.pathname.replace(/\/$/, "");
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const slug = parsed.pathname.split("/").filter(Boolean).pop() || "AI Tool";
+    candidates.push({ title: normalizeFuturepediaTitle(slug.replace(/-/g, " ")), url, context: "" });
   }
 
-  if (!unique.length) throw new Error("No valid Futurepedia tool URLs returned");
-  return unique.slice(0, 10);
+  if (!candidates.length) throw new Error("Gemini returned no valid Futurepedia tool URLs");
+  return candidates.slice(0, 10);
 }
-
 async function chooseFuturepediaTool(candidates) {
   if (!candidates.length) throw new Error("Futurepedia returned no AI tool candidates");
 
