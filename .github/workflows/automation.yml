@@ -1,8 +1,6 @@
 name: AI Opportunity Hub Hourly Automation
 
 on:
-  push:
-    branches: ["main"]
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch:
@@ -18,12 +16,11 @@ jobs:
       - name: Wait for Render service
         run: sleep 90
 
-      - name: Run Futurepedia automation test
+      - name: Run hourly Futurepedia automation
         env:
           HUB_URL: https://ai-opportunity-hub.onrender.com
         run: |
           set -e
-          echo "Running AI Opportunity Hub live Futurepedia test..."
           curl --fail --show-error --silent --location \
             --max-time 180 \
             --retry 3 \
