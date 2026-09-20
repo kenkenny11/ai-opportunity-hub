@@ -3662,6 +3662,38 @@ function normalizeFuturepediaTitle(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+async function callGeminiWithFallback(bodyFactory, preferredModel = GEMINI_MODEL) {
+  const models = [preferredModel, "gemini-3.6-flash", "gemini-3.5-flash"];
+  const tried = new Set();
+
+  for (const model of models) {
+    if (!model || tried.has(model)) continue;
+    tried.add(model);
+
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": GEMINI_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(bodyFactory(model))
+    });
+
+    const data = await response.json();
+
+    if (response.ok) return { data, model };
+
+    const message = data?.error?.message || JSON.stringify(data).slice(0, 500);
+    console.warn("Gemini model " + model + " failed with HTTP " + response.status + ": " + message);
+
+    if (![429, 500, 502, 503, 504].includes(response.status)) {
+      throw new Error("Gemini HTTP " + response.status + ": " + message);
+    }
+  }
+
+  throw new Error("All configured Gemini models are temporarily unavailable");
+}
+
 async function getFuturepediaToolCandidates() {
   // Futurepedia can return HTTP 403 to server-side requests. Try the direct page first,
   // then use Gemini URL Context to read the same reference site instead of failing the cycle.
@@ -3725,14 +3757,8 @@ async function getFuturepediaToolCandidates() {
       required: ["candidates"]
     };
 
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": GEMINI_API_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: GEMINI_MODEL,
+    const gemini = await callGeminiWithFallback((model) => ({
+      model,
         input:
           "Read the Futurepedia homepage at " + FUTUREPEDIA_HOME + " using URL Context. " +
           "Identify 10 currently featured, trending, or prominently listed AI tools. " +
@@ -3743,10 +3769,9 @@ async function getFuturepediaToolCandidates() {
         response_format: { type: "text", mime_type: "application/json", schema },
         generation_config: { max_output_tokens: 1200 }
       })
-    });
 
-    const data = await response.json();
-    if (!response.ok) {
+    }));
+    const data = gemini.data;    if (false) {
       throw new Error("Gemini Futurepedia fallback HTTP " + response.status + ": " +
         (data?.error?.message || JSON.stringify(data).slice(0, 500)));
     }
@@ -3832,14 +3857,8 @@ async function generateFuturepediaPost(tool) {
     "Futurepedia homepage title: " + tool.title + "\n" +
     "Homepage context: " + tool.context;
 
-  const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
-    method: "POST",
-    headers: {
-      "x-goog-api-key": GEMINI_API_KEY,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: GEMINI_MODEL,
+  const gemini = await callGeminiWithFallback((model) => ({
+    model,
       input: prompt,
       tools: [{ type: "url_context" }],
       response_format: { type: "text", mime_type: "application/json", schema },
@@ -3847,10 +3866,7 @@ async function generateFuturepediaPost(tool) {
     })
   });
 
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error("Gemini HTTP " + response.status + ": " + (data?.error?.message || JSON.stringify(data).slice(0, 500)));
-  }
+  const data = gemini.data;
 
   const output = (data.steps || [])
     .filter((step) => step.type === "model_output")
