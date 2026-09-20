@@ -15,7 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Wait for Render service
+        run: sleep 90
+
       - name: Run hourly Futurepedia automation
+        if: "!contains(github.event.head_commit.message, 'Restore hourly schedule')"
         env:
           HUB_URL: https://ai-opportunity-hub.onrender.com
         run: |
