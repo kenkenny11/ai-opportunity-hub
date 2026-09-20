@@ -11,9 +11,11 @@ app.use(express.json());
 
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TEST_CHAT_ID = process.env.TELEGRAM_TEST_CHAT_ID;
 const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
 const DATABASE_URL = process.env.DATABASE_URL;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const FUTUREPEDIA_HOME = "https://www.futurepedia.io/";
 const AFFILIATE_ADMIN_KEY = process.env.AFFILIATE_ADMIN_KEY;
 const ADMIN_DASHBOARD_KEY = process.env.ADMIN_DASHBOARD_KEY;
 const TELEGRAM_WEBHOOK_URL =
@@ -208,11 +210,7 @@ This starter pack is delivered digitally through AI Opportunity Hub after paymen
   `);
 
   const stableSources = [
-    { name: "Anthropic Newsroom", url: "https://www.anthropic.com/news", category: "AI News", reliability: 95 },
-    { name: "Google AI", url: "https://blog.google/innovation-and-ai/technology/ai/", category: "AI News", reliability: 95 },
-    { name: "Hugging Face Blog", url: "https://huggingface.co/blog", category: "AI News", reliability: 90 },
-    { name: "GitHub AI & ML", url: "https://github.blog/ai-and-ml/", category: "AI Tools", reliability: 90 },
-    { name: "Microsoft AI Blog", url: "https://blogs.microsoft.com/blog/", category: "AI News", reliability: 90 }
+    { name: "Futurepedia", url: FUTUREPEDIA_HOME, category: "AI Tools", reliability: 95 }
   ];
 
   for (const source of stableSources) {
@@ -221,37 +219,6 @@ This starter pack is delivered digitally through AI Opportunity Hub after paymen
        SELECT $1, $2, $3, 1, $4
        WHERE NOT EXISTS (SELECT 1 FROM sources WHERE LOWER(name)=LOWER($1))`,
       [source.name, source.url, source.category, source.reliability]
-    );
-  }
-
-  const additionalSources = [
-    {
-      name: "Product Hunt",
-      url: "https://www.producthunt.com/",
-      category: "Digital Opportunities",
-      reliability: 85
-    },
-    {
-      name: "Wellfound AI & Startup Jobs",
-      url: "https://wellfound.com/remote",
-      category: "AI Jobs",
-      reliability: 90
-    }
-  ];
-
-  for (const source of additionalSources) {
-    await pool.query(
-      `INSERT INTO sources (name, url, category, active, reliability)
-       SELECT $1, $2, $3, 1, $4
-       WHERE NOT EXISTS (
-         SELECT 1 FROM sources WHERE LOWER(name) = LOWER($1)
-       )`,
-      [
-        source.name,
-        source.url,
-        source.category,
-        source.reliability
-      ]
     );
   }
 
@@ -3426,6 +3393,9 @@ async function handleTelegramUpdate(update) {
   try {
     if (!update) return;
 
+    const incomingChat = update.message?.chat || update.callback_query?.message?.chat;
+    if (incomingChat && incomingChat.type !== "private") return;
+
     if (update.pre_checkout_query) {
       await telegram("answerPreCheckoutQuery", {
         pre_checkout_query_id: update.pre_checkout_query.id,
@@ -3612,7 +3582,17 @@ app.get("/api/system/status", async (req, res) => {
     const content = await pool.query("SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='published')::int AS published, COUNT(*) FILTER (WHERE status='draft')::int AS drafts FROM content");
     const affiliates = await pool.query("SELECT COUNT(*)::int AS count FROM affiliate WHERE active=1");
     const premium = await pool.query("SELECT COUNT(*)::int AS count FROM premium_products WHERE active=1");
-    res.json({status:"ok",service:"AI Opportunity Hub",database:"connected",telegram:BOT_TOKEN?"configured":"missing",automation:"disabled - GitHub Actions workflow canceled",auto_publish_threshold:75,max_posts_per_cycle:3,content:content.rows[0],active_affiliates:Number(affiliates.rows[0].count),premium_products:Number(premium.rows[0].count)});
+    res.json({
+      status:"ok",
+      service:"AI Opportunity Hub",
+      database:"connected",
+      telegram:BOT_TOKEN?"configured":"missing",
+      channel:CHANNEL_USERNAME||"missing",
+      gemini:GEMINI_API_KEY?"configured":"missing",
+      automation:"Futurepedia + Gemini hourly",
+      schedule:"GitHub Actions hourly",
+      content:content.rows[0]
+    });
   } catch (error) { res.status(500).json({status:"error",error:error.message}); }
 });
 
@@ -3677,155 +3657,209 @@ async function createFallbackHubContent() {
   return created;
 }
 
+
+function normalizeFuturepediaTitle(value) {
+  return String(value || "").replace(/\\s+/g, " ").trim();
+}
+
+async function getFuturepediaToolCandidates() {
+  const html = await fetchPage(FUTUREPEDIA_HOME);
+  const $ = cheerio.load(html);
+  const out = [];
+  const seen = new Set();
+
+  $("a[href]").each((index, element) => {
+    const href = $(element).attr("href");
+    if (!href) return;
+
+    let url;
+    try { url = new URL(href, FUTUREPEDIA_HOME); } catch { return; }
+
+    if (url.hostname !== "www.futurepedia.io" || !url.pathname.startsWith("/tool/")) return;
+
+    const key = url.href.split("#")[0];
+    if (seen.has(key)) return;
+
+    const title = normalizeFuturepediaTitle(
+      $(element).find("h1,h2,h3,h4,h5,h6").first().text() ||
+      $(element).text() ||
+      url.pathname.split("/").pop().replace(/-/g, " ")
+    );
+
+    if (title.length < 2 || title.length > 140) return;
+
+    seen.add(key);
+    out.push({
+      title,
+      url: key,
+      context: $(element).parent().text().replace(/\\s+/g, " ").trim().slice(0, 700)
+    });
+  });
+
+  return out.slice(0, 150);
+}
+
+async function chooseFuturepediaTool(candidates) {
+  if (!candidates.length) throw new Error("Futurepedia returned no AI tool candidates");
+
+  const recent = await pool.query(
+    'SELECT source_url FROM content WHERE status = \'published\' AND source_url IS NOT NULL AND published_at > CURRENT_TIMESTAMP - INTERVAL \'30 days\' ORDER BY published_at DESC LIMIT 500'
+  );
+  const used = new Set(recent.rows.map((row) => String(row.source_url)));
+  const fresh = candidates.find((candidate) => !used.has(candidate.url));
+
+  if (fresh) return fresh;
+
+  const older = await pool.query(
+    'SELECT source_url FROM content WHERE source_url IS NOT NULL ORDER BY created_at DESC LIMIT 500'
+  );
+  const allUsed = new Set(older.rows.map((row) => String(row.source_url)));
+  return candidates.find((candidate) => !allUsed.has(candidate.url)) || candidates[0];
+}
+
+async function generateFuturepediaPost(tool) {
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
+
+  const schema = {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      tool_name: { type: "string" },
+      post: { type: "string" },
+      official_url: { type: "string" }
+    },
+    required: ["title", "tool_name", "post", "official_url"]
+  };
+
+  const prompt =
+    "You are the editorial writer for AI Opportunity Hub.\n\n" +
+    "Reference source: " + tool.url + "\n\n" +
+    "Read that Futurepedia page and create one current factual Telegram update about the AI tool.\n\n" +
+    "Rules:\n" +
+    "- Futurepedia is the reference source.\n" +
+    "- Use only facts supported by the page.\n" +
+    "- Do not invent features, pricing, ratings, users, dates, integrations or performance claims.\n" +
+    "- State pricing carefully because it can change.\n" +
+    "- Explain what the tool does and mention concrete capabilities only when supported.\n" +
+    "- Write naturally and do not copy sentences from Futurepedia.\n" +
+    "- No hype, promises or affiliate language.\n" +
+    "- Make the post 90-160 words.\n" +
+    "- Return JSON matching the schema exactly.\n\n" +
+    "Futurepedia homepage title: " + tool.title + "\n" +
+    "Homepage context: " + tool.context;
+
+  const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": GEMINI_API_KEY,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: GEMINI_MODEL,
+      input: prompt,
+      tools: [{ type: "url_context" }],
+      response_format: { type: "text", mime_type: "application/json", schema },
+      generation_config: { max_output_tokens: 700 }
+    })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error("Gemini HTTP " + response.status + ": " + (data?.error?.message || JSON.stringify(data).slice(0, 500)));
+  }
+
+  const output = (data.steps || [])
+    .filter((step) => step.type === "model_output")
+    .flatMap((step) => step.content || [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.text || "")
+    .join("")
+    .trim();
+
+  if (!output) throw new Error("Gemini returned no generated content");
+
+  let result;
+  try { result = JSON.parse(output); } catch { throw new Error("Gemini returned invalid JSON"); }
+
+  if (!result.title || !result.tool_name || !result.post) {
+    throw new Error("Gemini response is missing required post fields");
+  }
+
+  return {
+    title: String(result.title).trim(),
+    tool_name: String(result.tool_name).trim(),
+    post: String(result.post).trim(),
+    official_url: String(result.official_url || "").trim()
+  };
+}
+
+async function runFuturepediaHourlyCycle() {
+  if (!BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+  if (!CHANNEL_USERNAME) throw new Error("TELEGRAM_CHANNEL_USERNAME is not configured");
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
+
+  const candidates = await getFuturepediaToolCandidates();
+  const tool = await chooseFuturepediaTool(candidates);
+  const generated = await generateFuturepediaPost(tool);
+
+  const lines = [
+    "🤖 " + generated.title,
+    "",
+    generated.post,
+    "",
+    generated.official_url ? "🔗 Official website: " + generated.official_url : "",
+    "📚 Source: Futurepedia",
+    "🔎 " + tool.url,
+    "",
+    "#AITools #AI"
+  ];
+
+  const body = lines.join("\n");
+
+  const duplicate = await pool.query(
+    "SELECT id FROM content WHERE LOWER(title)=LOWER($1) OR source_url=$2 LIMIT 1",
+    [generated.title, tool.url]
+  );
+  if (duplicate.rows.length) {
+    return { published: false, skipped: "duplicate", content_id: duplicate.rows[0].id, tool: tool.title };
+  }
+
+  const inserted = await pool.query(
+    "INSERT INTO content(title,body,category,source,source_url,ai_score,status) VALUES($1,$2,'AI Tools','Futurepedia',$3,100,'draft') RETURNING *",
+    [generated.title, body, tool.url]
+  );
+
+  const content = inserted.rows[0];
+  const telegramResult = await publishTelegramContent(content);
+
+  await pool.query(
+    "UPDATE content SET status='published', telegram_message_id=$1, published_at=CURRENT_TIMESTAMP WHERE id=$2",
+    [telegramResult.message_id, content.id]
+  );
+
+  await pool.query(
+    "INSERT INTO analytics(content_id,views,reactions,comments,clicks,ctr,performance_score) VALUES($1,0,0,0,0,0,0)",
+    [content.id]
+  );
+
+  console.log("Futurepedia published #" + content.id + ": " + generated.tool_name);
+  return {
+    published: true,
+    content_id: content.id,
+    tool: generated.tool_name,
+    source_url: tool.url,
+    telegram_message_id: telegramResult.message_id
+  };
+}
+
 async function runAutomationCycle() {
-  console.log("Starting automation cycle...");
-
+  const started = Date.now();
   try {
-    const collectResponse = await fetch(
-      `http://127.0.0.1:${PORT}/api/collect`
-    );
-    const collectResult = await collectResponse.json();
-    console.log("Collector:", collectResult.total_saved ?? collectResult.error);
-
-    let fallbackCreated = 0;
-    if (!Number(collectResult.total_saved || 0)) {
-      try {
-        fallbackCreated = await createFallbackHubContent();
-        console.log("Fallback content created:", fallbackCreated);
-      } catch (error) {
-        console.error("Fallback content failed:", error.message);
-      }
-    }
-
-    const affiliateAutomation = await generateAffiliatePartnerDrafts(3);
-    console.log("Affiliate automation:", affiliateAutomation);
-
-    const scoreResult = await pool.query(
-      `SELECT *
-       FROM content
-       WHERE status = 'draft'
-         AND (ai_score IS NULL OR ai_score = 0)
-       ORDER BY id DESC
-       LIMIT 10`
-    );
-
-    let scored = 0;
-    for (const content of scoreResult.rows) {
-      try {
-        const evaluation = await scoreContentWithAI(content);
-
-        const nextStatus =
-          evaluation.score <= 20
-            ? "rejected"
-            : "draft";
-
-        await pool.query(
-          `UPDATE content
-           SET ai_score = $1,
-               category = $2,
-               status = $4
-           WHERE id = $3`,
-          [evaluation.score, evaluation.category, content.id, nextStatus]
-        );
-
-        scored++;
-        console.log(
-          `Scored #${content.id}: ${evaluation.score} (${nextStatus})`
-        );
-      } catch (error) {
-        console.error(`Scoring #${content.id} failed:`, error.message);
-      }
-    }
-
-    const generateResult = await pool.query(
-      `SELECT *
-       FROM content
-       WHERE status = 'draft'
-         AND ai_score >= 75
-         AND (body IS NULL OR body = '' OR body LIKE 'Collected from %')
-       ORDER BY ai_score DESC, id DESC
-       LIMIT 5`
-    );
-
-    let generated = 0;
-    for (const content of generateResult.rows) {
-      try {
-        let post = await generateContentWithAI(content);
-        post = await addAffiliateTrackingToPost(post, content);
-
-        await pool.query(
-          "UPDATE content SET body = $1 WHERE id = $2",
-          [post, content.id]
-        );
-
-        generated++;
-        console.log(`Generated #${content.id}`);
-      } catch (error) {
-        console.error(`Generation #${content.id} failed:`, error.message);
-      }
-    }
-
-    const publishResult = await pool.query(
-      `SELECT *
-       FROM content
-       WHERE status = 'draft'
-         AND ai_score >= 75
-         AND body IS NOT NULL
-         AND body <> ''
-         AND body NOT LIKE 'Collected from %'
-       ORDER BY ai_score DESC, id DESC
-       LIMIT 3`
-    );
-
-    let published = 0;
-    for (const content of publishResult.rows) {
-      try {
-        const telegramResult = await publishTelegramContent(content);
-
-        await pool.query(
-          `UPDATE content
-           SET status = 'published',
-               telegram_message_id = $1,
-               published_at = CURRENT_TIMESTAMP
-           WHERE id = $2
-             AND status = 'draft'`,
-          [telegramResult.message_id, content.id]
-        );
-        await pool.query(
-          `INSERT INTO analytics (content_id, views, reactions, comments, clicks, ctr, performance_score)
-           VALUES ($1, 0, 0, 0, 0, 0, 0)`,
-          [content.id]
-        );
-
-        published++;
-        console.log(
-          `Published #${content.id} as Telegram message ${telegramResult.message_id}`
-        );
-      } catch (error) {
-        console.error(`Publishing #${content.id} failed:`, error.message);
-      }
-    }
-
-    console.log(
-      `Automation complete: scored=${scored}, generated=${generated}, published=${published}`
-    );
-
-    return {
-      collected: collectResult,
-      fallback_created: fallbackCreated,
-      affiliate_automation: affiliateAutomation,
-      scored,
-      generated,
-      published
-    };
+    const result = await runFuturepediaHourlyCycle();
+    return { ...result, duration_ms: Date.now() - started };
   } catch (error) {
-    console.error("Automation cycle failed:", error);
-    return {
-      scored: 0,
-      generated: 0,
-      published: 0,
-      error: error.message
-    };
+    console.error("Futurepedia hourly automation failed:", error);
+    return { published: false, error: error.message, duration_ms: Date.now() - started };
   }
 }
 
@@ -3863,6 +3897,7 @@ async function startServer() {
     if (BOT_TOKEN) {
       telegram("setWebhook", {
         url: TELEGRAM_WEBHOOK_URL,
+        allowed_updates: ["message", "callback_query", "pre_checkout_query"],
         ...(process.env.TELEGRAM_WEBHOOK_SECRET
           ? { secret_token: process.env.TELEGRAM_WEBHOOK_SECRET }
           : {})
@@ -3873,8 +3908,10 @@ async function startServer() {
 
     app.listen(PORT, () => {
       console.log("AI Opportunity Hub running on port " + PORT);
-      console.log("Automation scheduler: GitHub Actions");
-      console.log("Internal interval disabled so Render Free sleep cannot stop scheduled publishing.");
+      console.log("Automation scheduler: GitHub Actions hourly");
+      console.log("Content source: Futurepedia");
+      console.log("AI writer: " + GEMINI_MODEL);
+      console.log("Telegram output: channel + private bot only");
     });
   } catch (error) {
     console.error("Failed to start server:", error);
