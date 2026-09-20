@@ -3659,7 +3659,7 @@ async function createFallbackHubContent() {
 
 
 function normalizeFuturepediaTitle(value) {
-  return String(value || "").replace(/\\s+/g, " ").trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 async function getFuturepediaToolCandidates() {
@@ -3692,7 +3692,7 @@ async function getFuturepediaToolCandidates() {
     out.push({
       title,
       url: key,
-      context: $(element).parent().text().replace(/\\s+/g, " ").trim().slice(0, 700)
+      context: $(element).parent().text().replace(/\s+/g, " ").trim().slice(0, 700)
     });
   });
 
