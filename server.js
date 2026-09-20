@@ -3715,34 +3715,14 @@ async function callGemini(bodyFactory) {
 async function getFuturepediaToolCandidates() {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
 
-  const schema = {
-    type: "object",
-    properties: {
-      candidates: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            url: { type: "string" },
-            context: { type: "string" }
-          },
-          required: ["title", "url", "context"]
-        }
-      }
-    },
-    required: ["candidates"]
-  };
-
   const data = await callGemini((model) => ({
     model,
     input:
       "Use URL Context to read " + FUTUREPEDIA_HOME + ". " +
       "Identify up to 10 currently featured, popular, recently added, trending, or prominently listed AI tools. " +
-      "Return only tools whose exact page URL is under https://www.futurepedia.io/tool/. " +
-      "Do not invent URLs. Give the tool name and a short factual context visible on Futurepedia.",
+      "Return EXACTLY one line per tool in this format: TOOL: name | URL: https://www.futurepedia.io/tool/... | CONTEXT: short factual context. " +
+      "Use only exact Futurepedia tool URLs. Do not invent URLs. No markdown, no bullets, no extra commentary.",
     tools: [{ type: "url_context" }],
-    response_format: { type: "text", mime_type: "application/json", schema },
     generation_config: { max_output_tokens: 1200 }
   }));
 
@@ -3751,33 +3731,42 @@ async function getFuturepediaToolCandidates() {
     .flatMap((step) => step.content || [])
     .filter((block) => block.type === "text")
     .map((block) => block.text || "")
-    .join("")
+    .join("\n")
     .trim();
 
   if (!output) throw new Error("Gemini returned no Futurepedia tool candidates");
 
-  let parsed;
-  try { parsed = parseGeminiJson(output); }
-  catch { throw new Error("Gemini returned invalid Futurepedia candidate JSON"); }
+  const candidates = [];
+  const re = /TOOL:\s*(.*?)\s*\|\s*URL:\s*(https:\/\/www\.futurepedia\.io\/tool\/[^\s|]+)\s*\|\s*CONTEXT:\s*(.*)/gi;
+  let match;
 
-  const candidates = (parsed.candidates || [])
-    .filter((item) => {
-      try {
-        const u = new URL(String(item.url));
-        return u.hostname === "www.futurepedia.io" && u.pathname.startsWith("/tool/");
-      } catch {
-        return false;
-      }
-    })
-    .map((item) => ({
-      title: normalizeFuturepediaTitle(String(item.title || "")),
-      url: String(item.url).split("#")[0],
-      context: String(item.context || "").replace(/\s+/g, " ").trim().slice(0, 700)
-    }))
-    .filter((item) => item.title.length >= 2 && item.title.length <= 140);
+  while ((match = re.exec(output)) !== null) {
+    candidates.push({
+      title: normalizeFuturepediaTitle(match[1]),
+      url: match[2].split("#")[0],
+      context: String(match[3] || "").replace(/\s+/g, " ").trim().slice(0, 700)
+    });
+  }
 
-  if (!candidates.length) throw new Error("No valid Futurepedia tool URLs returned");
-  return candidates.slice(0, 10);
+  if (!candidates.length) {
+    const urls = [...output.matchAll(/https:\/\/www\.futurepedia\.io\/tool\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=-]+/gi)];
+    for (const item of urls) {
+      const url = item[0].replace(/[),.;]+$/, "");
+      const slug = url.split("/").filter(Boolean).pop().replace(/-/g, " ");
+      candidates.push({ title: normalizeFuturepediaTitle(slug), url, context: "" });
+    }
+  }
+
+  const unique = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (!candidate.title || seen.has(candidate.url)) continue;
+    seen.add(candidate.url);
+    unique.push(candidate);
+  }
+
+  if (!unique.length) throw new Error("No valid Futurepedia tool URLs returned");
+  return unique.slice(0, 10);
 }
 
 async function chooseFuturepediaTool(candidates) {
@@ -3799,39 +3788,27 @@ async function chooseFuturepediaTool(candidates) {
 }
 
 async function generateFuturepediaPost(tool) {
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not confasync function generateFuturepediaPost(tool) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
-
-  const schema = {
-    type: "object",
-    properties: {
-      title: { type: "string" },
-      tool_name: { type: "string" },
-      post: { type: "string" },
-      official_url: { type: "string" }
-    },
-    required: ["title", "tool_name", "post", "official_url"]
-  };
 
   const prompt =
     "You are the editorial writer for AI Opportunity Hub.\n\n" +
-    "Reference source: " + tool.url + "\n\n" +
-    "Read the Futurepedia page and create one current factual Telegram update about this AI tool.\n\n" +
-    "Rules:\n" +
-    "- Futurepedia is the reference source.\n" +
-    "- Use only facts supported by the page.\n" +
-    "- Do not invent features, pricing, ratings, users, dates, integrations or performance claims.\n" +
-    "- State pricing carefully because it can change.\n" +
-    "- Explain what the tool does and mention concrete capabilities only when supported.\n" +
-    "- Write naturally; do not copy sentences from Futurepedia.\n" +
-    "- No hype, promises or affiliate language.\n" +
-    "- Make the post 90-160 words.\n" +
-    "- Return JSON matching the schema exactly.";
+    "Read this Futurepedia page: " + tool.url + "\n\n" +
+    "Create one current factual Telegram update about the AI tool.\n" +
+    "Use only facts supported by the Futurepedia page. Do not invent features, pricing, ratings, dates, integrations or performance claims.\n" +
+    "Write 90-160 words. No hype, promises or affiliate language.\n\n" +
+    "Return exactly this plain-text format and nothing else:\n" +
+    "TITLE: short headline\n" +
+    "TOOL_NAME: tool name\n" +
+    "OFFICIAL_URL: official website URL\n" +
+    "POST:\n" +
+    "the 90-160 word Telegram post\n" +
+    "END_POST";
 
   const data = await callGemini((model) => ({
     model,
     input: prompt,
     tools: [{ type: "url_context" }],
-    response_format: { type: "text", mime_type: "application/json", schema },
     generation_config: { max_output_tokens: 700 }
   }));
 
@@ -3840,29 +3817,28 @@ async function generateFuturepediaPost(tool) {
     .flatMap((step) => step.content || [])
     .filter((block) => block.type === "text")
     .map((block) => block.text || "")
-    .join("")
+    .join("\n")
     .trim();
 
-  if (!output) throw new Error("Gemini returned no generated content");
+  const title = output.match(/^TITLE:\s*(.+)$/im)?.[1]?.trim();
+  const toolName = output.match(/^TOOL_NAME:\s*(.+)$/im)?.[1]?.trim();
+  const officialUrl = output.match(/^OFFICIAL_URL:\s*(.+)$/im)?.[1]?.trim() || "";
+  const postMatch = output.match(/POST:\s*\n([\s\S]*?)\nEND_POST/i);
+  const post = postMatch?.[1]?.trim();
 
-  let result;
-  try { result = parseGeminiJson(output); }
-  catch { throw new Error("Gemini returned invalid post JSON"); }
-
-  if (!result.title || !result.tool_name || !result.post) {
-    throw new Error("Gemini response is missing required post fields");
+  if (!title || !toolName || !post) {
+    throw new Error("Gemini returned incomplete Telegram post fields");
   }
 
   return {
-    title: String(result.title).trim(),
-    tool_name: String(result.tool_name).trim(),
-    post: String(result.post).trim(),
-    official_url: String(result.official_url || "").trim()
+    title,
+    tool_name: toolName,
+    post,
+    official_url: officialUrl
   };
 }
 
-async function runFuturepediaHourlyCycle() {
-  if (!BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+red");
   if (!CHANNEL_USERNAME) throw new Error("TELEGRAM_CHANNEL_USERNAME is not configured");
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
 
