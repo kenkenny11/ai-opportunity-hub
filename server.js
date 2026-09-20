@@ -16,6 +16,9 @@ const CHANNEL_USERNAME = process.env.TELEGRAM_CHANNEL_USERNAME;
 const DATABASE_URL = process.env.DATABASE_URL;
 const AFFILIATE_ADMIN_KEY = process.env.AFFILIATE_ADMIN_KEY;
 const ADMIN_DASHBOARD_KEY = process.env.ADMIN_DASHBOARD_KEY;
+const TELEGRAM_WEBHOOK_URL =
+  process.env.TELEGRAM_WEBHOOK_URL ||
+  "https://ai-opportunity-hub.onrender.com/telegram/webhook";
 
 function requireAdmin(req, res, next) {
   if (!ADMIN_DASHBOARD_KEY) {
@@ -3346,6 +3349,79 @@ async function sendTelegramHome(chatId) {
   });
 }
 
+async function isTelegramChannelAdmin(userId) {
+  if (!CHANNEL_USERNAME || !userId) return false;
+  try {
+    const result = await telegram("getChatMember", {
+      chat_id: CHANNEL_USERNAME,
+      user_id: userId
+    });
+    const status = result.result?.status;
+    return status === "creator" || status === "administrator";
+  } catch (error) {
+    console.error("Telegram admin check failed:", error.message);
+    return false;
+  }
+}
+
+async function fullResetFromTelegram(requesterUserId) {
+  if (!(await isTelegramChannelAdmin(requesterUserId))) {
+    throw new Error("Only a Telegram channel administrator can run /clearall.");
+  }
+
+  const contentResult = await pool.query(
+    `SELECT telegram_message_id
+     FROM content
+     WHERE telegram_message_id IS NOT NULL
+     ORDER BY id DESC`
+  );
+
+  let deletedTelegramMessages = 0;
+  let failedTelegramMessages = 0;
+
+  for (const row of contentResult.rows) {
+    try {
+      await telegram("deleteMessage", {
+        chat_id: CHANNEL_USERNAME,
+        message_id: Number(row.telegram_message_id)
+      });
+      deletedTelegramMessages++;
+    } catch (error) {
+      failedTelegramMessages++;
+      console.warn(
+        `Could not delete Telegram message ${row.telegram_message_id}: ${error.message}`
+      );
+    }
+  }
+
+  await pool.query("BEGIN");
+  try {
+    await pool.query(`
+      TRUNCATE TABLE
+        analytics,
+        affiliate_clicks,
+        content,
+        affiliate,
+        ai_tools,
+        premium_products,
+        sources
+      RESTART IDENTITY CASCADE
+    `);
+    await pool.query("COMMIT");
+  } catch (error) {
+    await pool.query("ROLLBACK");
+    throw error;
+  }
+
+  await initializeDatabase();
+
+  return {
+    deleted_telegram_messages: deletedTelegramMessages,
+    failed_telegram_messages: failedTelegramMessages,
+    reset_database: true
+  };
+}
+
 async function handleTelegramUpdate(update) {
   try {
     if (!update) return;
@@ -3408,6 +3484,41 @@ async function handleTelegramUpdate(update) {
     const command = rawText.split(/\\s+/)[0].toLowerCase();
 
     if (command === "/start" || command === "/help") return sendTelegramHome(message.chat.id);
+
+    if (command === "/clearall" || command === "/clear") {
+      const requesterUserId = message.from?.id;
+      const isAdmin = await isTelegramChannelAdmin(requesterUserId);
+
+      if (!isAdmin) {
+        await telegram("sendMessage", {
+          chat_id: message.chat.id,
+          text: "⛔ This command is restricted to AI Opportunity Hub channel administrators."
+        });
+        return;
+      }
+
+      await telegram("sendMessage", {
+        chat_id: message.chat.id,
+        text:
+          "⚠️ Full reset started. Published bot messages will be removed when Telegram allows deletion, and the Hub database will be reset."
+      });
+
+      const result = await fullResetFromTelegram(requesterUserId);
+
+      await telegram("sendMessage", {
+        chat_id: message.chat.id,
+        text:
+          "✅ <b>AI Opportunity Hub reset complete</b>\n\n" +
+          `🗑 Telegram messages deleted: ${result.deleted_telegram_messages}\n` +
+          `⚠️ Telegram messages not deleted: ${result.failed_telegram_messages}\n` +
+          "🧹 Database content, analytics, affiliate data, tools, premium products and sources were reset.\n\n" +
+          "The default Hub configuration has been recreated.",
+        parse_mode: "HTML",
+        reply_markup: telegramMenuKeyboard()
+      });
+      return;
+    }
+
     if (command === "/tools") return sendTelegramToolsMenu(message.chat.id);
     if (command === "/jobs") return sendTelegramCategory(message.chat.id, "jobs");
     if (command === "/free") return sendTelegramCategory(message.chat.id, "free");
@@ -3501,7 +3612,7 @@ app.get("/api/system/status", async (req, res) => {
     const content = await pool.query("SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='published')::int AS published, COUNT(*) FILTER (WHERE status='draft')::int AS drafts FROM content");
     const affiliates = await pool.query("SELECT COUNT(*)::int AS count FROM affiliate WHERE active=1");
     const premium = await pool.query("SELECT COUNT(*)::int AS count FROM premium_products WHERE active=1");
-    res.json({status:"ok",service:"AI Opportunity Hub",database:"connected",telegram:BOT_TOKEN?"configured":"missing",automation:"30-minute cycle",auto_publish_threshold:75,max_posts_per_cycle:3,content:content.rows[0],active_affiliates:Number(affiliates.rows[0].count),premium_products:Number(premium.rows[0].count)});
+    res.json({status:"ok",service:"AI Opportunity Hub",database:"connected",telegram:BOT_TOKEN?"configured":"missing",automation:"disabled - GitHub Actions workflow canceled",auto_publish_threshold:75,max_posts_per_cycle:3,content:content.rows[0],active_affiliates:Number(affiliates.rows[0].count),premium_products:Number(premium.rows[0].count)});
   } catch (error) { res.status(500).json({status:"error",error:error.message}); }
 });
 
@@ -3750,9 +3861,14 @@ async function startServer() {
     await initializeDatabase();
 
     if (BOT_TOKEN) {
-      telegram("deleteWebhook", { drop_pending_updates: false })
-        .then(() => console.log("Telegram interactive webhook disabled"))
-        .catch((error) => console.error("Telegram webhook cleanup failed:", error.message));
+      telegram("setWebhook", {
+        url: TELEGRAM_WEBHOOK_URL,
+        ...(process.env.TELEGRAM_WEBHOOK_SECRET
+          ? { secret_token: process.env.TELEGRAM_WEBHOOK_SECRET }
+          : {})
+      })
+        .then(() => console.log("Telegram webhook enabled:", TELEGRAM_WEBHOOK_URL))
+        .catch((error) => console.error("Telegram webhook setup failed:", error.message));
     }
 
     app.listen(PORT, () => {
