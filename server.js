@@ -3695,8 +3695,6 @@ async function callGeminiWithFallback(bodyFactory, preferredModel = GEMINI_MODEL
 }
 
 async function getFuturepediaToolCandidates() {
-  // Futurepedia can return HTTP 403 to server-side requests. Try the direct page first,
-  // then use Gemini URL Context to read the same reference site instead of failing the cycle.
   try {
     const html = await fetchPage(FUTUREPEDIA_HOME);
     const $ = cheerio.load(html);
@@ -3759,23 +3757,18 @@ async function getFuturepediaToolCandidates() {
 
     const gemini = await callGeminiWithFallback((model) => ({
       model,
-        input:
-          "Read the Futurepedia homepage at " + FUTUREPEDIA_HOME + " using URL Context. " +
-          "Identify 10 currently featured, trending, or prominently listed AI tools. " +
-          "Return only tools that have a real Futurepedia URL under https://www.futurepedia.io/tool/. " +
-          "Use the exact Futurepedia tool URL when available. Do not invent URLs. " +
-          "For each, give the visible tool name and a short factual context from Futurepedia.",
-        tools: [{ type: "url_context" }],
-        response_format: { type: "text", mime_type: "application/json", schema },
-        generation_config: { max_output_tokens: 1200 }
-      })
-
+      input:
+        "Read the Futurepedia homepage at " + FUTUREPEDIA_HOME + " using URL Context. " +
+        "Identify 10 currently featured, trending, or prominently listed AI tools. " +
+        "Return only tools that have a real Futurepedia URL under https://www.futurepedia.io/tool/. " +
+        "Use exact Futurepedia tool URLs when available. Do not invent URLs. " +
+        "For each, give the visible tool name and a short factual context from Futurepedia.",
+      tools: [{ type: "url_context" }],
+      response_format: { type: "text", mime_type: "application/json", schema },
+      generation_config: { max_output_tokens: 1200 }
     }));
-    const data = gemini.data;    if (false) {
-      throw new Error("Gemini Futurepedia fallback HTTP " + response.status + ": " +
-        (data?.error?.message || JSON.stringify(data).slice(0, 500)));
-    }
 
+    const data = gemini.data;
     const output = (data.steps || [])
       .filter((step) => step.type === "model_output")
       .flatMap((step) => step.content || [])
@@ -3786,7 +3779,10 @@ async function getFuturepediaToolCandidates() {
 
     if (!output) throw new Error("Gemini Futurepedia fallback returned no content");
 
-    const parsed = JSON.parse(output);
+    let parsed;
+    try { parsed = JSON.parse(output); }
+    catch { throw new Error("Gemini Futurepedia fallback returned invalid JSON"); }
+
     const candidates = (parsed.candidates || [])
       .filter((item) => {
         try {
@@ -3806,6 +3802,70 @@ async function getFuturepediaToolCandidates() {
     if (!candidates.length) throw new Error("Gemini Futurepedia fallback returned no valid tool URLs");
     return candidates.slice(0, 10);
   }
+}
+
+async function generateFuturepediaPost(tool) {
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
+
+  const schema = {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      tool_name: { type: "string" },
+      post: { type: "string" },
+      official_url: { type: "string" }
+    },
+    required: ["title", "tool_name", "post", "official_url"]
+  };
+
+  const prompt =
+    "You are the editorial writer for AI Opportunity Hub.\n\n" +
+    "Reference source: " + tool.url + "\n\n" +
+    "Read that Futurepedia page and create one current factual Telegram update about the AI tool.\n\n" +
+    "Rules:\n" +
+    "- Futurepedia is the reference source.\n" +
+    "- Use only facts supported by the page.\n" +
+    "- Do not invent features, pricing, ratings, users, dates, integrations or performance claims.\n" +
+    "- State pricing carefully because it can change.\n" +
+    "- Explain what the tool does and mention concrete capabilities only when supported.\n" +
+    "- Write naturally and do not copy sentences from Futurepedia.\n" +
+    "- No hype, promises or affiliate language.\n" +
+    "- Make the post 90-160 words.\n" +
+    "- Return JSON matching the schema exactly.\n";
+
+  const gemini = await callGeminiWithFallback((model) => ({
+    model,
+    input: prompt,
+    tools: [{ type: "url_context" }],
+    response_format: { type: "text", mime_type: "application/json", schema },
+    generation_config: { max_output_tokens: 700 }
+  }));
+
+  const data = gemini.data;
+  const output = (data.steps || [])
+    .filter((step) => step.type === "model_output")
+    .flatMap((step) => step.content || [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.text || "")
+    .join("")
+    .trim();
+
+  if (!output) throw new Error("Gemini returned no generated content");
+
+  let result;
+  try { result = JSON.parse(output); }
+  catch { throw new Error("Gemini returned invalid JSON"); }
+
+  if (!result.title || !result.tool_name || !result.post) {
+    throw new Error("Gemini response is missing required post fields");
+  }
+
+  return {
+    title: String(result.title).trim(),
+    tool_name: String(result.tool_name).trim(),
+    post: String(result.post).trim(),
+    official_url: String(result.official_url || "").trim()
+  };
 }
 
 async function chooseFuturepediaTool(candidates) {
