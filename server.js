@@ -3663,40 +3663,124 @@ function normalizeFuturepediaTitle(value) {
 }
 
 async function getFuturepediaToolCandidates() {
-  const html = await fetchPage(FUTUREPEDIA_HOME);
-  const $ = cheerio.load(html);
-  const out = [];
-  const seen = new Set();
+  // Futurepedia can return HTTP 403 to server-side requests. Try the direct page first,
+  // then use Gemini URL Context to read the same reference site instead of failing the cycle.
+  try {
+    const html = await fetchPage(FUTUREPEDIA_HOME);
+    const $ = cheerio.load(html);
+    const out = [];
+    const seen = new Set();
 
-  $("a[href]").each((index, element) => {
-    const href = $(element).attr("href");
-    if (!href) return;
+    $("a[href]").each((index, element) => {
+      const href = $(element).attr("href");
+      if (!href) return;
 
-    let url;
-    try { url = new URL(href, FUTUREPEDIA_HOME); } catch { return; }
+      let url;
+      try { url = new URL(href, FUTUREPEDIA_HOME); } catch { return; }
 
-    if (url.hostname !== "www.futurepedia.io" || !url.pathname.startsWith("/tool/")) return;
+      if (url.hostname !== "www.futurepedia.io" || !url.pathname.startsWith("/tool/")) return;
 
-    const key = url.href.split("#")[0];
-    if (seen.has(key)) return;
+      const key = url.href.split("#")[0];
+      if (seen.has(key)) return;
 
-    const title = normalizeFuturepediaTitle(
-      $(element).find("h1,h2,h3,h4,h5,h6").first().text() ||
-      $(element).text() ||
-      url.pathname.split("/").pop().replace(/-/g, " ")
-    );
+      const title = normalizeFuturepediaTitle(
+        $(element).find("h1,h2,h3,h4,h5,h6").first().text() ||
+        $(element).text() ||
+        url.pathname.split("/").pop().replace(/-/g, " ")
+      );
 
-    if (title.length < 2 || title.length > 140) return;
+      if (title.length < 2 || title.length > 140) return;
 
-    seen.add(key);
-    out.push({
-      title,
-      url: key,
-      context: $(element).parent().text().replace(/\s+/g, " ").trim().slice(0, 700)
+      seen.add(key);
+      out.push({
+        title,
+        url: key,
+        context: $(element).parent().text().replace(/\s+/g, " ").trim().slice(0, 700)
+      });
     });
-  });
 
-  return out.slice(0, 150);
+    if (out.length) return out.slice(0, 150);
+    throw new Error("Futurepedia returned no tool links");
+  } catch (directError) {
+    console.warn("Futurepedia direct fetch failed; using Gemini URL Context fallback:", directError.message);
+
+    if (!GEMINI_API_KEY) throw directError;
+
+    const schema = {
+      type: "object",
+      properties: {
+        candidates: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              url: { type: "string" },
+              context: { type: "string" }
+            },
+            required: ["title", "url", "context"]
+          }
+        }
+      },
+      required: ["candidates"]
+    };
+
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": GEMINI_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: GEMINI_MODEL,
+        input:
+          "Read the Futurepedia homepage at " + FUTUREPEDIA_HOME + " using URL Context. " +
+          "Identify 10 currently featured, trending, or prominently listed AI tools. " +
+          "Return only tools that have a real Futurepedia URL under https://www.futurepedia.io/tool/. " +
+          "Use the exact Futurepedia tool URL when available. Do not invent URLs. " +
+          "For each, give the visible tool name and a short factual context from Futurepedia.",
+        tools: [{ type: "url_context" }],
+        response_format: { type: "text", mime_type: "application/json", schema },
+        generation_config: { max_output_tokens: 1200 }
+      })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error("Gemini Futurepedia fallback HTTP " + response.status + ": " +
+        (data?.error?.message || JSON.stringify(data).slice(0, 500)));
+    }
+
+    const output = (data.steps || [])
+      .filter((step) => step.type === "model_output")
+      .flatMap((step) => step.content || [])
+      .filter((block) => block.type === "text")
+      .map((block) => block.text || "")
+      .join("")
+      .trim();
+
+    if (!output) throw new Error("Gemini Futurepedia fallback returned no content");
+
+    const parsed = JSON.parse(output);
+    const candidates = (parsed.candidates || [])
+      .filter((item) => {
+        try {
+          const u = new URL(String(item.url));
+          return u.hostname === "www.futurepedia.io" && u.pathname.startsWith("/tool/");
+        } catch {
+          return false;
+        }
+      })
+      .map((item) => ({
+        title: normalizeFuturepediaTitle(String(item.title || "")),
+        url: String(item.url).split("#")[0],
+        context: String(item.context || "").replace(/\s+/g, " ").trim().slice(0, 700)
+      }))
+      .filter((item) => item.title.length >= 2 && item.title.length <= 140);
+
+    if (!candidates.length) throw new Error("Gemini Futurepedia fallback returned no valid tool URLs");
+    return candidates.slice(0, 10);
+  }
 }
 
 async function chooseFuturepediaTool(candidates) {
