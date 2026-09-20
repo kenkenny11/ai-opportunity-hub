@@ -1153,7 +1153,7 @@ app.post(
       res.json({
         published: true,
         channel: CHANNEL_USERNAME,
-        telegram_message_id: telegramResult.result.message_id,
+        telegram_message_id: telegramResult.message_id,
         content: updated.rows[0]
       });
     } catch (error) {
@@ -1212,13 +1212,13 @@ app.get("/api/ai/publish/:id", async (req, res) => {
            published_at = CURRENT_TIMESTAMP
        WHERE id = $2
        RETURNING *`,
-      [telegramResult.result.message_id, content.id]
+      [telegramResult.message_id, content.id]
     );
 
     res.json({
       published: true,
       channel: CHANNEL_USERNAME,
-      telegram_message_id: telegramResult.result.message_id,
+      telegram_message_id: telegramResult.message_id,
       content: updated.rows[0]
     });
   } catch (error) {
@@ -1291,7 +1291,7 @@ app.get(
           RETURNING *
         `,
         [
-          telegramResult.result.message_id,
+          telegramResult.message_id,
           content.id
         ]
       );
@@ -1300,7 +1300,7 @@ app.get(
         published: true,
         channel: CHANNEL_USERNAME,
         telegram_message_id:
-          telegramResult.result.message_id,
+          telegramResult.message_id,
         content: updated.rows[0]
       });
     } catch (error) {
@@ -1709,7 +1709,7 @@ app.get("/api/affiliate/content/:id/publish", async (req, res) => {
       throw new Error(telegramResult?.description || "Telegram publish failed");
     }
 
-    const telegramMessageId = telegramResult.result.message_id;
+    const telegramMessageId = telegramResult.message_id;
 
     await pool.query(
       `UPDATE content
@@ -3678,7 +3678,7 @@ async function runAutomationCycle() {
                published_at = CURRENT_TIMESTAMP
            WHERE id = $2
              AND status = 'draft'`,
-          [telegramResult.result.message_id, content.id]
+          [telegramResult.message_id, content.id]
         );
         await pool.query(
           `INSERT INTO analytics (content_id, views, reactions, comments, clicks, ctr, performance_score)
@@ -3688,7 +3688,7 @@ async function runAutomationCycle() {
 
         published++;
         console.log(
-          `Published #${content.id} as Telegram message ${telegramResult.result.message_id}`
+          `Published #${content.id} as Telegram message ${telegramResult.message_id}`
         );
       } catch (error) {
         console.error(`Publishing #${content.id} failed:`, error.message);
