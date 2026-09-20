@@ -1147,7 +1147,7 @@ app.post(
              published_at = CURRENT_TIMESTAMP
          WHERE id = $2
          RETURNING *`,
-        [telegramResult.result.message_id, content.id]
+        [telegramResult.message_id, content.id]
       );
 
       res.json({
