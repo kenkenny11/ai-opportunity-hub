@@ -3554,6 +3554,58 @@ async function handleTelegramUpdate(update) {
       return;
     }
 
+
+    if (command === "/growth" || command === "/growthstats") {
+      const requesterUserId = message.from?.id;
+      const isAdmin = await isTelegramChannelAdmin(requesterUserId);
+      if (!isAdmin) {
+        await telegram("sendMessage",{chat_id:message.chat.id,text:"⛔ Growth controls are restricted to channel administrators."});
+        return;
+      }
+      const count = await telegram("getChatMemberCount",{chat_id:CHANNEL_USERNAME});
+      const totals = await pool.query("SELECT COUNT(*)::int AS links, (SELECT COUNT(*)::int FROM growth_joins) AS joins FROM growth_invite_links WHERE revoked_at IS NULL");
+      const top = await pool.query(`
+        SELECT name,invite_link,COUNT(j.id)::int AS joins
+        FROM growth_invite_links l
+        LEFT JOIN growth_joins j ON j.invite_link=l.invite_link
+        WHERE l.revoked_at IS NULL
+        GROUP BY l.id
+        ORDER BY joins DESC,l.created_at DESC LIMIT 5
+      `);
+      const lines=["📈 <b>AI Opportunity Hub Growth</b>","","👥 Channel members: "+count.result,"🔗 Active tracked links: "+totals.rows[0].links,"🎯 Attributed joins: "+totals.rows[0].joins,""];
+      if(top.rows.length){ lines.push("Top tracked sources:"); for(const row of top.rows){ lines.push("• "+escapeTelegramHtml(row.name)+" — "+row.joins+" joins"); } }
+      lines.push("","Use /growthlink <name> to create a named invite link for a promotion.","Use /growthhealth to test bot/channel access.");
+      await telegram("sendMessage",{chat_id:message.chat.id,text:lines.join("\n"),parse_mode:"HTML",reply_markup:telegramMenuKeyboard()});
+      return;
+    }
+
+    if (command === "/growthlink") {
+      const requesterUserId = message.from?.id;
+      const isAdmin = await isTelegramChannelAdmin(requesterUserId);
+      if (!isAdmin) {
+        await telegram("sendMessage",{chat_id:message.chat.id,text:"⛔ Growth controls are restricted to channel administrators."});
+        return;
+      }
+      const name = rawText.replace(/^\/growthlink\s*/i,"").trim() || ("promo-"+Date.now());
+      const link = await createGrowthInviteLink(name);
+      await telegram("sendMessage",{chat_id:message.chat.id,text:"🔗 <b>Tracked invite link created</b>\n\nName: "+escapeTelegramHtml(name.slice(0,32))+"\nLink: "+link.invite_link+"\n\nUse this link only for the specific promotion/source you want to measure.",parse_mode:"HTML",reply_markup:telegramMenuKeyboard()});
+      return;
+    }
+
+    if (command === "/growthhealth") {
+      const requesterUserId = message.from?.id;
+      const isAdmin = await isTelegramChannelAdmin(requesterUserId);
+      if (!isAdmin) {
+        await telegram("sendMessage",{chat_id:message.chat.id,text:"⛔ Growth controls are restricted to channel administrators."});
+        return;
+      }
+      const me = await telegram("getMe");
+      const chat = await telegram("getChat",{chat_id:CHANNEL_USERNAME});
+      const count = await telegram("getChatMemberCount",{chat_id:CHANNEL_USERNAME});
+      await telegram("sendMessage",{chat_id:message.chat.id,text:"✅ <b>Growth engine healthy</b>\n\nBot: @"+escapeTelegramHtml(me.result?.username||"unknown")+"\nChannel: "+escapeTelegramHtml(chat.result?.username||CHANNEL_USERNAME)+"\nMembers: "+count.result+"\nInvite attribution: enabled",parse_mode:"HTML",reply_markup:telegramMenuKeyboard()});
+      return;
+    }
+
     if (command === "/tools") return sendTelegramToolsMenu(message.chat.id);
     if (command === "/jobs") return sendTelegramCategory(message.chat.id, "jobs");
     if (command === "/free") return sendTelegramCategory(message.chat.id, "free");
