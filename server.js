@@ -258,6 +258,70 @@ This starter pack is delivered digitally through AI Opportunity Hub after paymen
     )`
   );
 
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS growth_channels (
+      id SERIAL PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      title TEXT,
+      niche TEXT,
+      country TEXT,
+      subscribers INTEGER DEFAULT 0,
+      avg_views INTEGER DEFAULT 0,
+      engagement REAL DEFAULT 0,
+      source TEXT DEFAULT 'manual',
+      contact_url TEXT,
+      status TEXT DEFAULT 'prospect',
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS growth_campaigns (
+      id SERIAL PRIMARY KEY,
+      channel_id INTEGER REFERENCES growth_channels(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      placement_url TEXT,
+      status TEXT DEFAULT 'planned',
+      budget TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS growth_invite_links (
+      id SERIAL PRIMARY KEY,
+      campaign_id INTEGER REFERENCES growth_campaigns(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      invite_link TEXT NOT NULL UNIQUE,
+      telegram_name TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      revoked_at TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS growth_joins (
+      id SERIAL PRIMARY KEY,
+      invite_link TEXT,
+      user_id BIGINT,
+      username TEXT,
+      joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(invite_link, user_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS growth_events (
+      id SERIAL PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      campaign_id INTEGER REFERENCES growth_campaigns(id) ON DELETE SET NULL,
+      invite_link TEXT,
+      payload JSONB,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   console.log("Database initialized");
 }
 
@@ -3390,6 +3454,7 @@ async function fullResetFromTelegram(requesterUserId) {
 }
 
 async function handleTelegramUpdate(update) {
+  if (update?.chat_member) { try { await recordGrowthJoin(update); } catch (e) { console.error("Growth join tracking error:", e.message); } return; }
   try {
     if (!update) return;
 
@@ -3932,6 +3997,186 @@ app.post("/api/automation/run", async (req, res) => {
   }
 });
 
+
+async function recordGrowthJoin(update) {
+  const cm=update?.chat_member;
+  if(!cm?.invite_link) return;
+  const newStatus=cm.new_chat_member?.status;
+  const oldStatus=cm.old_chat_member?.status;
+  const user=cm.new_chat_member?.user;
+  if(!user?.id) return;
+  if(newStatus==="member" && !["member","administrator","creator"].includes(oldStatus||"left")) {
+    await pool.query(
+      "INSERT INTO growth_joins(invite_link,user_id,username) VALUES($1,$2,$3) ON CONFLICT(invite_link,user_id) DO NOTHING",
+      [cm.invite_link.invite_link, user.id, user.username ? "@"+user.username : null]
+    );
+    await pool.query(
+      "INSERT INTO growth_events(event_type,invite_link,payload) VALUES($1,$2,$3)",
+      ["join",cm.invite_link.invite_link,JSON.stringify({user_id:user.id,username:user.username||null})]
+    );
+  }
+}
+
+
+function growthAdmin(req, res, next) {
+  if (!ADMIN_DASHBOARD_KEY) return res.status(503).json({ error: "ADMIN_DASHBOARD_KEY is not configured" });
+  const provided = req.get("x-admin-key") || req.query.admin_key;
+  if (provided !== ADMIN_DASHBOARD_KEY) return res.status(401).json({ error: "Unauthorized" });
+  next();
+}
+
+async function createGrowthInviteLink(name, campaignId = null) {
+  if (!BOT_TOKEN || !CHANNEL_USERNAME) throw new Error("Telegram bot/channel configuration is missing");
+  const safeName = String(name || "growth").slice(0, 32);
+  const result = await telegram("createChatInviteLink", {
+    chat_id: CHANNEL_USERNAME,
+    name: safeName,
+    creates_join_request: false
+  });
+  const link = result?.result;
+  if (!link?.invite_link) throw new Error("Telegram did not return an invite link");
+  await pool.query(
+    "INSERT INTO growth_invite_links(campaign_id,name,invite_link,telegram_name) VALUES($1,$2,$3,$4)",
+    [campaignId, safeName, link.invite_link, link.name || safeName]
+  );
+  return link;
+}
+
+app.get("/api/growth/health", async (req, res) => {
+  try {
+    const me = await telegram("getMe");
+    const chat = await telegram("getChat", { chat_id: CHANNEL_USERNAME });
+    const count = await telegram("getChatMemberCount", { chat_id: CHANNEL_USERNAME });
+    res.json({
+      ok: true,
+      bot: me.result?.username || null,
+      channel: chat.result?.username || CHANNEL_USERNAME,
+      channel_title: chat.result?.title || null,
+      members: count.result,
+      invite_links_supported: true,
+      attribution: "chat_member updates + named invite links"
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/growth/dashboard", growthAdmin, async (req, res) => {
+  try {
+    const [channels,campaigns,links,joins] = await Promise.all([
+      pool.query("SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='prospect')::int AS prospects, COUNT(*) FILTER (WHERE status='active')::int AS active FROM growth_channels"),
+      pool.query("SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='active')::int AS active FROM growth_campaigns"),
+      pool.query("SELECT COUNT(*)::int AS total FROM growth_invite_links WHERE revoked_at IS NULL"),
+      pool.query("SELECT COUNT(*)::int AS total, COUNT(DISTINCT user_id)::int AS unique_users FROM growth_joins")
+    ]);
+    const top = await pool.query(`
+      SELECT l.id,l.name,l.invite_link,l.created_at,COUNT(j.id)::int AS joins
+      FROM growth_invite_links l
+      LEFT JOIN growth_joins j ON j.invite_link=l.invite_link
+      WHERE l.revoked_at IS NULL
+      GROUP BY l.id
+      ORDER BY joins DESC,l.created_at DESC
+      LIMIT 50
+    `);
+    res.json({ ok:true, summary:{channels:channels.rows[0],campaigns:campaigns.rows[0],links:links.rows[0],joins:joins.rows[0]}, links:top.rows });
+  } catch (error) { res.status(500).json({ ok:false,error:error.message }); }
+});
+
+app.post("/api/growth/channels", growthAdmin, async (req, res) => {
+  try {
+    const username=String(req.body?.username||"").trim().replace(/^@/,"");
+    if (!username) return res.status(400).json({error:"username is required"});
+    const title=String(req.body?.title||"").trim()||null;
+    const niche=String(req.body?.niche||"AI").trim()||null;
+    const country=String(req.body?.country||"").trim()||null;
+    const subscribers=Number.isFinite(Number(req.body?.subscribers))?Math.max(0,Math.round(Number(req.body.subscribers))):0;
+    const avgViews=Number.isFinite(Number(req.body?.avg_views))?Math.max(0,Math.round(Number(req.body.avg_views))):0;
+    const engagement=Number.isFinite(Number(req.body?.engagement))?Math.max(0,Number(req.body.engagement)):0;
+    const contactUrl=String(req.body?.contact_url||"").trim()||null;
+    const r=await pool.query(`
+      INSERT INTO growth_channels(username,title,niche,country,subscribers,avg_views,engagement,contact_url)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT(username) DO UPDATE SET title=COALESCE(EXCLUDED.title,growth_channels.title),niche=COALESCE(EXCLUDED.niche,growth_channels.niche),country=COALESCE(EXCLUDED.country,growth_channels.country),subscribers=EXCLUDED.subscribers,avg_views=EXCLUDED.avg_views,engagement=EXCLUDED.engagement,contact_url=COALESCE(EXCLUDED.contact_url,growth_channels.contact_url),updated_at=CURRENT_TIMESTAMP
+      RETURNING *
+    `,[username,title,niche,country,subscribers,avgViews,engagement,contactUrl]);
+    res.json({ok:true,channel:r.rows[0]});
+  } catch(error){res.status(500).json({ok:false,error:error.message});}
+});
+
+app.get("/api/growth/channels", growthAdmin, async (req,res)=>{
+  try {
+    const q=String(req.query.q||"").trim();
+    const r=await pool.query(`
+      SELECT * FROM growth_channels
+      WHERE ($1='' OR username ILIKE '%'||$1||'%' OR title ILIKE '%'||$1||'%' OR niche ILIKE '%'||$1||'%')
+      ORDER BY engagement DESC,subscribers DESC,updated_at DESC LIMIT 200
+    `,[q]);
+    res.json({ok:true,channels:r.rows});
+  } catch(error){res.status(500).json({ok:false,error:error.message});}
+});
+
+app.post("/api/growth/campaigns", growthAdmin, async (req,res)=>{
+  try {
+    const name=String(req.body?.name||"").trim();
+    if(!name) return res.status(400).json({error:"name is required"});
+    const channelId=req.body?.channel_id?Number(req.body.channel_id):null;
+    const placementUrl=String(req.body?.placement_url||"").trim()||null;
+    const budget=String(req.body?.budget||"").trim()||null;
+    const notes=String(req.body?.notes||"").trim()||null;
+    const r=await pool.query(`
+      INSERT INTO growth_campaigns(channel_id,name,placement_url,budget,notes) VALUES($1,$2,$3,$4,$5) RETURNING *
+    `,[channelId,name,placementUrl,budget,notes]);
+    const campaign=r.rows[0];
+    const link=await createGrowthInviteLink(name,campaign.id);
+    res.json({ok:true,campaign,invite_link:link.invite_link});
+  } catch(error){res.status(500).json({ok:false,error:error.message});}
+});
+
+app.get("/api/growth/campaigns", growthAdmin, async (req,res)=>{
+  try {
+    const r=await pool.query(`
+      SELECT c.*,g.username AS channel_username,g.title AS channel_title,l.invite_link,COALESCE(j.joins,0)::int AS joins
+      FROM growth_campaigns c
+      LEFT JOIN growth_channels g ON g.id=c.channel_id
+      LEFT JOIN growth_invite_links l ON l.campaign_id=c.id AND l.revoked_at IS NULL
+      LEFT JOIN (SELECT invite_link,COUNT(*) AS joins FROM growth_joins GROUP BY invite_link) j ON j.invite_link=l.invite_link
+      ORDER BY c.created_at DESC LIMIT 200
+    `);
+    res.json({ok:true,campaigns:r.rows});
+  } catch(error){res.status(500).json({ok:false,error:error.message});}
+});
+
+app.post("/api/growth/invite-links", growthAdmin, async (req,res)=>{
+  try {
+    const name=String(req.body?.name||"growth").trim();
+    const campaignId=req.body?.campaign_id?Number(req.body.campaign_id):null;
+    const link=await createGrowthInviteLink(name,campaignId);
+    res.json({ok:true,link});
+  } catch(error){res.status(500).json({ok:false,error:error.message});}
+});
+
+app.post("/api/growth/invite-links/revoke", growthAdmin, async (req,res)=>{
+  try {
+    const link=String(req.body?.invite_link||"").trim();
+    if(!link) return res.status(400).json({error:"invite_link is required"});
+    await telegram("revokeChatInviteLink",{chat_id:CHANNEL_USERNAME,invite_link:link});
+    await pool.query("UPDATE growth_invite_links SET revoked_at=CURRENT_TIMESTAMP WHERE invite_link=$1",[link]);
+    res.json({ok:true,revoked:link});
+  } catch(error){res.status(500).json({ok:false,error:error.message});}
+});
+
+app.get("/api/growth/tools", growthAdmin, async (req,res)=>{
+  res.json({
+    ok:true,
+    tools:[
+      {name:"Telegram Ads",type:"paid",url:"https://ads.telegram.org/getting-started",note:"Official sponsored messages and campaign analytics."},
+      {name:"Telemetr",type:"research",url:"https://www.telemetr.com/",note:"Public channel analytics, rankings and ad intelligence."},
+      {name:"Onflow Ads",type:"cross-promotion",url:"https://onflowads.com/telegram",note:"Cross-promotion marketplace; verify partner quality before agreeing to a placement."}
+    ],
+    policy:"Use opt-in promotion, cross-promotion and paid placements. Do not mass-add or unsolicited-message users."
+  });
+});
+
 async function startServer() {
   try {
     await initializeDatabase();
@@ -3939,7 +4184,7 @@ async function startServer() {
     if (BOT_TOKEN) {
       telegram("setWebhook", {
         url: TELEGRAM_WEBHOOK_URL,
-        allowed_updates: ["message", "callback_query", "pre_checkout_query"],
+        allowed_updates: ["message", "callback_query", "pre_checkout_query", "chat_member", "chat_join_request"],
         ...(process.env.TELEGRAM_WEBHOOK_SECRET
           ? { secret_token: process.env.TELEGRAM_WEBHOOK_SECRET }
           : {})
